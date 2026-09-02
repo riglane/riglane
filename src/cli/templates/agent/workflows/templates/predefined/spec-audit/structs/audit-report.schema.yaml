@@ -1,0 +1,100 @@
+name: audit-report
+description: >
+  Final consolidated audit document — all domain REVIEW results, deep-verified by
+  VERIFY, merged into one report. Per confirmed divergence: what it is, its
+  divergence severity, and the full code path that produces it — NO fix (audit is
+  diagnosis, not remediation). Grouped by domain; NOT by spec-obligation severity
+  (every spec is mandatory).
+format: json
+
+json_schema:
+  required_fields:
+    - field: workflow
+      type: string
+    - field: report_version
+      type: number
+      description: >
+        Format version of this report (const 1) — lets the report viewer
+        (Projects Spec & Audit) branch on shape without filename parsing.
+    - field: run_id
+      type: string
+      description: >
+        The run that produced this report — self-contained identity for the
+        viewer (no filename parsing).
+    - field: report_generated_at
+      type: string
+    - field: target_scope
+      type: string
+    - field: scopes_audited
+      type: array
+    - field: summary
+      type: object
+    - field: summary.total_specs
+      type: number
+    - field: summary.total_domains
+      type: number
+    - field: summary.total_files
+      type: number
+    - field: summary.filters
+      type: object
+    - field: compliance
+      type: object
+    - field: compliance.compliant
+      type: number
+    - field: compliance.violation
+      type: number
+    - field: compliance.partial
+      type: number
+    - field: compliance.unverifiable
+      type: number
+    - field: compliance.compliance_rate
+      type: number
+    - field: divergence_breakdown
+      type: object
+      description: >
+        Confirmed-divergence counts by DEGREE — NOT spec-obligation severity.
+    - field: divergence_breakdown.not_implemented
+      type: number
+    - field: divergence_breakdown.partial
+      type: number
+    - field: divergence_breakdown.edge_case
+      type: number
+    - field: divergences
+      type: array
+      description: 'Confirmed divergences (VERIFY-finalized). NO suggested fix.'
+    - field: divergences[].spec_id
+      type: string
+    - field: divergences[].domain
+      type: string
+    - field: divergences[].divergence_severity
+      type: string
+      enum: [not_implemented, partial, edge_case]
+    - field: divergences[].what
+      type: string
+      description: '(a) what the divergence is — detailed.'
+    - field: divergences[].file
+      type: string
+      description: >
+        WHERE the divergence manifests — the audited source file (machine-
+        readable / clickable for the viewer). For a not_implemented divergence
+        this is the file where the behavior is expected but absent.
+    - field: divergences[].path
+      type: string
+      description: >
+        (c) HOW — the full traced code/mechanism route that produces it,
+        accessibly explained (not "line X matched a pattern"). An optional
+        `line` (number) accompanies `file` when the divergence is tied to a
+        specific line (absent for a not_implemented divergence spread across a
+        file).
+    - field: domain_summaries
+      type: array
+    - field: domain_summaries[].domain
+      type: string
+    - field: domain_summaries[].compliance_rate
+      type: number
+    - field: domain_summaries[].divergences_count
+      type: number
+
+file_checks:
+  exists: true
+  min_size: 200

@@ -1,0 +1,13 @@
+name: preview
+description: spec-capabilities-demo dry-run outcome
+version: 1
+type: object
+required:
+  - verdict
+  - dedup_note
+properties:
+  verdict:
+    type: string
+    enum: [clean, held, error]
+  dedup_note:
+    type: string

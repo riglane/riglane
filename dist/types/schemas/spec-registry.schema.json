@@ -1,0 +1,74 @@
+{
+    "$schema": "https://json-schema.org/draft-07/schema#",
+    "$id": "riglane-spec-registry-v1",
+    "title": "Riglane Spec Registry (_registry.json)",
+    "description": "Per-scope engine-owned mapping at .riglane/specs/<scope>/_registry.json. Answers 'which file implements/affects which spec'. Populated at IMPLEMENTATION time via the spec_link tool (engine validates the delta) — NOT at extraction (no code yet → implemented_by legitimately empty). Design: sub_tasks/spec-system-revision/design/index-registry.md §2.",
+    "type": "object",
+    "required": ["version", "scope", "mappings"],
+    "additionalProperties": false,
+    "properties": {
+        "version": {
+            "type": "integer",
+            "const": 1,
+            "description": "Schema version. Starts at 1 (clean v1). mappings is an OBJECT keyed by spec_id (fixes A3, where ensureScopeDir seeded an array)."
+        },
+        "scope": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$",
+            "description": "The scope this registry belongs to. Equals the directory it lives in (fixes A2 — registry is scope-aware)."
+        },
+        "mappings": {
+            "type": "object",
+            "description": "Map of spec_id -> mapping. OBJECT (not array) so lookups are O(1) and there is exactly one mapping per spec.",
+            "additionalProperties": { "$ref": "#/definitions/mapping" }
+        }
+    },
+    "definitions": {
+        "mapping": {
+            "type": "object",
+            "required": ["spec", "implemented_by"],
+            "additionalProperties": false,
+            "properties": {
+                "spec": {
+                    "type": "string",
+                    "description": "Spec file path relative to project root, e.g. specs/generic/auth/auth-001.md."
+                },
+                "implemented_by": {
+                    "type": "array",
+                    "description": "Source files related to this spec, each with a role. Empty for specs authored without code (extraction).",
+                    "items": { "$ref": "#/definitions/implementedBy" }
+                }
+            }
+        },
+        "implementedBy": {
+            "type": "object",
+            "required": ["file", "role", "added_by", "added_at"],
+            "additionalProperties": false,
+            "description": "One file<->spec relationship. role is a verb prescribing a verification action (index-registry §2.2). added_by/added_at are provenance for the remove guard (§2.3).",
+            "properties": {
+                "file": {
+                    "type": "string",
+                    "description": "Source file path relative to project root."
+                },
+                "role": {
+                    "type": "string",
+                    "enum": ["implements", "configures", "verifies", "uses", "affects"],
+                    "description": "implements = produces the behavior (verify ALL requirements) · configures = sets the constrained values, incl. former 'style' (verify the values) · verifies = tests the behavior (verify coverage) · uses = consumes the spec's contract (don't break consumption) · affects = indirect dependency that ripples into the spec (proactively re-verify on change)."
+                },
+                "note": {
+                    "type": "string",
+                    "description": "Optional free-text specifics written by the agent at spec_link (e.g. 'sets warning color to red'). Nothing depends on it; valued for audit/provenance."
+                },
+                "added_by": {
+                    "type": "string",
+                    "description": "Provenance: the run_id that added this mapping (used by the remove guard)."
+                },
+                "added_at": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                    "description": "Provenance: date this mapping was added (ISO YYYY-MM-DD)."
+                }
+            }
+        }
+    }
+}

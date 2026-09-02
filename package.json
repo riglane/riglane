@@ -1,0 +1,90 @@
+{
+  "name": "riglane",
+  "version": "0.1.6",
+  "description": "Riglane — a control plane for coding-agent harnesses. Declarative multi-step workflows with engine-owned control flow, gates enforced by construction, and full run traces.",
+  "type": "module",
+  "engines": {
+    "node": ">=20.10.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "riglane": "./dist/cli/index.js",
+    "acp": "./dist/cli/index.js"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-templates.mjs",
+    "clean": "rm -rf dist coverage .vitest-cache",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:conformance": "vitest run test/conformance",
+    "test:unit": "vitest run test/unit",
+    "test:coverage": "vitest run --coverage",
+    "lint": "biome check src test",
+    "lint:fix": "biome check --write src test",
+    "format": "biome format --write src test",
+    "verify": "npm run typecheck && npm run lint && npm test"
+  },
+  "keywords": [
+    "llm",
+    "workflow",
+    "agent",
+    "mcp",
+    "claude",
+    "claude-code",
+    "cursor",
+    "codex",
+    "opencode",
+    "copilot",
+    "github-copilot",
+    "gemini",
+    "gemini-cli",
+    "orchestration",
+    "control-plane",
+    "gates",
+    "human-in-the-loop",
+    "trace",
+    "coding-agent",
+    "ai-agents"
+  ],
+  "author": "Todor Rusev",
+  "license": "MIT",
+  "dependencies": {
+    "@inkjs/ui": "^2.0.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "ink": "^6.8.0",
+    "react": "^19.2.5",
+    "smol-toml": "^1.6.1",
+    "yaml": "^2.6.1",
+    "glob": "^13.0.6"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/node": "^22.19.17",
+    "@types/react": "^19.2.14",
+    "@vitest/coverage-v8": "^2.1.8",
+    "jsdom": "^30.0.1",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/riglane/riglane.git"
+  },
+  "homepage": "https://riglane.dev",
+  "bugs": {
+    "url": "https://github.com/riglane/riglane/issues"
+  }
+}

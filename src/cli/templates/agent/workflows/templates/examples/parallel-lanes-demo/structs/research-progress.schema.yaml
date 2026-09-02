@@ -1,0 +1,15 @@
+name: research-progress
+description: The research lane's progress registry (current-state, overwritten each pass).
+version: 1
+type: object
+required:
+  - total
+  - processed
+  - remaining
+properties:
+  total:
+    type: integer
+  processed:
+    type: integer
+  remaining:
+    type: integer

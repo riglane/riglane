@@ -1,0 +1,466 @@
+{
+    "$schema": "https://json-schema.org/draft-07/schema#",
+    "$id": "riglane-mcp-v1",
+    "title": "Riglane MCP Server Contract",
+    "description": "Schemas for the workflow-engine MCP server's tool surface. Each tool has paired input + output definitions. Two additional definitions cover the success/error envelope used for all tools/call responses.",
+    "definitions": {
+        "tool_call_success": {
+            "type": "object",
+            "required": ["content"],
+            "additionalProperties": true,
+            "description": "Wrapper used by the engine for every successful tool/call response. The 'content' array always contains a single text item; the text is a JSON-serialized tool result.",
+            "properties": {
+                "content": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "object",
+                        "required": ["type", "text"],
+                        "properties": {
+                            "type": { "const": "text" },
+                            "text": { "type": "string" }
+                        }
+                    }
+                }
+            }
+        },
+        "tool_call_error": {
+            "type": "object",
+            "required": ["content", "isError"],
+            "additionalProperties": false,
+            "description": "Wrapper used by the engine for tool/call responses that failed inside the handler (caught exceptions or unknown tool names). isError MUST be true. JSON-RPC error envelope is NOT used for tool failures.",
+            "properties": {
+                "content": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "object",
+                        "required": ["type", "text"],
+                        "properties": {
+                            "type": { "const": "text" },
+                            "text": { "type": "string" }
+                        }
+                    }
+                },
+                "isError": { "const": true }
+            }
+        },
+        "engine_action": {
+            "type": "string",
+            "description": "The complete engine action vocabulary — every `action` value a workflow_engine tool can return. Per-tool outputs constrain to their own subset: step_begin refuses with BLOCKED_OUT_OF_ORDER / BLOCKED_PARTIAL_FAILURE / BLOCKED_LANES_ACTIVE / BLOCKED_FOREIGN_CALLER; step_collect_result decides with PROCEED / RETRY_STEP / STOP_WORKFLOW and refuses with BLOCKED_FOREIGN_CALLER (VERIFY_MANUALLY is historical — a verdict for a different step is now re-validated inline instead of asking for arbitration; kept so old artifacts validate); step_complete carries the control-flow actions (LOOP_BACK / ENTER_ROUTE / ENTER_LANES / LANE_WAIT / AWAITING_LOOP_DECISION / AWAITING_ROUTE_DECISION) on success envelopes — successful advances with a known target also carry the next step's begin payload (next_begin; lanes_begin per lane on ENTER_LANES) and FIX_AND_RETRY / STOP_WORKFLOW / USER_REJECTED / AWAITING_HUMAN_RESPONSE / BLOCKED_PARTIAL_FAILURE / BLOCKED_LANES_FAILED (the join barrier refused) / BLOCKED_FOREIGN_CALLER on error envelopes. BLOCKED_PLANNING_FAILURE belongs to the dynamic-planning tools, which this schema does not (yet) cover — it is listed so the vocabulary is complete in one place.",
+            "enum": [
+                "PROCEED",
+                "RETRY_STEP",
+                "STOP_WORKFLOW",
+                "VERIFY_MANUALLY",
+                "FIX_AND_RETRY",
+                "LOOP_BACK",
+                "ENTER_ROUTE",
+                "ENTER_LANES",
+                "LANE_WAIT",
+                "AWAITING_LOOP_DECISION",
+                "AWAITING_ROUTE_DECISION",
+                "AWAITING_HUMAN_RESPONSE",
+                "USER_REJECTED",
+                "BLOCKED_OUT_OF_ORDER",
+                "BLOCKED_LANES_ACTIVE",
+                "BLOCKED_LANES_FAILED",
+                "BLOCKED_PARTIAL_FAILURE",
+                "BLOCKED_PLANNING_FAILURE",
+                "BLOCKED_FOREIGN_CALLER"
+            ]
+        },
+        "workflow_resolve_input": {
+            "type": "object",
+            "required": ["name"],
+            "additionalProperties": false,
+            "properties": {
+                "name": { "type": "string", "description": "Workflow name (matches workflow.yaml `name`)." }
+            }
+        },
+        "workflow_resolve_output": {
+            "type": "object",
+            "required": ["name", "version", "description", "definition_dir", "params", "gate", "steps", "step_count"],
+            "additionalProperties": true,
+            "properties": {
+                "name": { "type": "string" },
+                "version": { "type": "integer", "minimum": 1 },
+                "description": { "type": "string" },
+                "definition_dir": { "type": "string" },
+                "params": { "type": "array", "items": { "type": "object" } },
+                "gate": { "type": "object" },
+                "context": { "type": "object" },
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["name"],
+                        "properties": {
+                            "name": { "type": "string" },
+                            "delegate_to": { "type": "string" },
+                            "parallel": { "type": "boolean" },
+                            "gate_override": { "type": "object" },
+                            "model": { "type": "string" }
+                        }
+                    }
+                },
+                "step_count": { "type": "integer", "minimum": 0 },
+                "tools": { "type": "array" }
+            }
+        },
+        "workflow_init_input": {
+            "type": "object",
+            "required": ["name"],
+            "additionalProperties": false,
+            "properties": {
+                "name": { "type": "string" },
+                "params": {
+                    "type": "object",
+                    "description": "User-provided params (key-value pairs). Engine merges with workflow.yaml param defaults; user values win."
+                }
+            }
+        },
+        "workflow_init_output": {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "required": ["run_id", "run_token", "runtime_dir", "first_step", "total_steps", "step_names", "params"],
+                    "additionalProperties": true,
+                    "description": "Success: a new run is initialized.",
+                    "properties": {
+                        "run_id": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*-[0-9]{8}-[0-9]{6}-[0-9a-f]{4}$" },
+                        "run_token": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+                        "runtime_dir": { "type": "string" },
+                        "first_step": { "type": ["string", "null"] },
+                        "total_steps": { "type": "integer", "minimum": 0 },
+                        "step_names": { "type": "array", "items": { "type": "string" } },
+                        "params": { "type": "object" },
+                        "tools": {
+                            "type": "object",
+                            "properties": {
+                                "available": { "type": "array" },
+                                "missing": { "type": "array" },
+                                "blocked": { "type": "boolean" },
+                                "block_message": { "type": "string" }
+                            }
+                        },
+                        "external_channel": {
+                            "type": "object",
+                            "description": "Present when the workflow declares a human gate (or loop/route decider) answered outside the terminal. The engine brings the local server up early so a consumer can read `discovery` for the live base URL + token; it is a declaration, not a verification — the guarantee that a question is answerable is enforced when the message is posted.",
+                            "properties": {
+                                "declared": { "type": "boolean" },
+                                "discovery": { "type": "string" }
+                            }
+                        },
+                        "next_begin": {
+                            "type": "object",
+                            "description": "Composite driving: the FIRST step's complete step_begin payload, composed at init (dynamic child inits included — workflow_invoke_dynamic forwards it) — drive from it directly, do not call step_begin for it. Absent = the old protocol (degraded compose, blocked tools)."
+                        }
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": ["error"],
+                    "additionalProperties": false,
+                    "description": "workflow_init rejection. Top-level runs mint a unique per-run dir and run in parallel; this fires only when a reused runtime_dir (dynamic child / externally-managed run) already holds an in-progress run.",
+                    "properties": {
+                        "error": { "type": "string" },
+                        "active_run_id": { "type": "string" }
+                    }
+                }
+            ]
+        },
+        "workflow_resume_input": {
+            "type": "object",
+            "required": ["name"],
+            "additionalProperties": false,
+            "properties": {
+                "name": { "type": "string" },
+                "run_id": { "type": "string", "description": "Which run to resume. Omitted: the latest resumable run of this workflow. Named: that run, or a refusal — never a silent redirect to another run." }
+            }
+        },
+        "workflow_resume_output": {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "required": ["run_id", "run_token", "runtime_dir", "status", "current_step", "params", "completed_summaries", "steps"],
+                    "additionalProperties": true,
+                    "properties": {
+                        "run_id": { "type": "string" },
+                        "run_token": { "type": "string" },
+                        "runtime_dir": { "type": "string" },
+                        "status": { "type": "string", "enum": ["in_progress", "completed", "failed", "paused"] },
+                        "current_step": { "type": ["string", "null"] },
+                        "current_step_status": { "type": ["string", "null"] },
+                        "params": { "type": "object" },
+                        "completed_summaries": { "type": "object", "description": "Map of step name -> summary markdown text." },
+                        "steps": { "type": "object" },
+                        "warning": { "type": "string" }
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": ["error"],
+                    "additionalProperties": false,
+                    "properties": { "error": { "type": "string" } }
+                }
+            ]
+        },
+        "step_begin_input": {
+            "type": "object",
+            "required": ["name", "step"],
+            "additionalProperties": false,
+            "properties": {
+                "name": { "type": "string" },
+                "step": { "type": "string" }
+            }
+        },
+        "step_begin_output": {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "required": ["type", "step_name"],
+                    "additionalProperties": true,
+                    "description": "Regular (non-parallel, non-delegation) step. Composite driving 7.2: a SUBAGENT step's envelope is SLIM — the engine composes the full task into prompt_file (inject:file content inlined) and the block fields (goal…run_token_text) are ABSENT; spawn with spawn_prompt verbatim. An INLINE (subagent: false) step carries the full blocks instead and has no prompt_file/spawn_prompt.",
+                    "properties": {
+                        "type": { "const": "regular" },
+                        "step_name": { "type": "string" },
+                        "step_index": { "type": "integer", "minimum": 0 },
+                        "subagent": { "type": "boolean" },
+                        "subagent_type": { "type": ["string", "null"] },
+                        "prompt_file": { "type": "string" },
+                        "spawn_prompt": { "type": "string" },
+                        "goal": { "type": "string" },
+                        "tool_docs": { "type": "string" },
+                        "params_text": { "type": "string" },
+                        "inputs": { "type": "array" },
+                        "outputs_text": { "type": "string" },
+                        "output_schemas": { "type": "array" },
+                        "summaries_text": { "type": "string" },
+                        "spec_guidance_text": { "type": "string", "description": "Unified spec guidance (spec-capability policy): consumption and/or authoring bodies with a single shared concept preamble + domain landscape. Empty when neither spec_check nor spec_authoring is set." },
+                        "constraints_text": { "type": "string" },
+                        "run_token_text": { "type": "string", "description": "HTML comment to inject into subagent task: <!--workflow:run_token:UUID-->" },
+                        "model": { "type": ["string", "null"] },
+                        "gate": {
+                            "type": "object",
+                            "description": "Composite driving: the resolved quality-gate flags — both false → step_complete directly after the subagent (it validates the verdict itself); either true → step_collect_result first, as before.",
+                            "properties": { "semantic": { "type": "boolean" }, "human": { "type": "boolean" } }
+                        },
+                        "subagent_warning": { "type": "string" }
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": ["type", "step_name", "delegate_to"],
+                    "additionalProperties": true,
+                    "description": "Delegation step (delegate_to set in workflow.yaml).",
+                    "properties": {
+                        "type": { "const": "delegation" },
+                        "step_name": { "type": "string" },
+                        "delegate_to": { "type": "string" },
+                        "resolved_params": { "type": "object" },
+                        "goal": { "type": ["string", "null"] },
+                        "param_bindings": { "type": "object" },
+                        "model": { "type": ["string", "null"] }
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": ["type", "step_name", "branches"],
+                    "additionalProperties": true,
+                    "description": "Parallel step (parallel: true). One entry per branch.",
+                    "properties": {
+                        "type": { "const": "parallel" },
+                        "step_name": { "type": "string" },
+                        "branch_count": { "type": "integer", "minimum": 1 },
+                        "prompt_dir": { "type": "string" },
+                        "branches": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["branch_index", "prompt_file", "spawn_prompt"],
+                                "properties": {
+                                    "branch_index": { "type": "integer", "minimum": 0 },
+                                    "prompt_file": { "type": "string" },
+                                    "spawn_prompt": { "type": "string" },
+                                    "subagent_type": { "type": ["string", "null"] },
+                                    "model": { "type": ["string", "null"] }
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": ["error"],
+                    "additionalProperties": true,
+                    "description": "Refusal / error envelope — no `type` discriminator. Carries an ORCHESTRATOR DIRECTIVE in `error` and, for engine refusals, an `action` from the step_begin subset (strict-cursor and ownership guards).",
+                    "properties": {
+                        "error": { "type": "string" },
+                        "action": {
+                            "type": "string",
+                            "enum": ["BLOCKED_OUT_OF_ORDER", "BLOCKED_PARTIAL_FAILURE", "BLOCKED_LANES_ACTIVE", "BLOCKED_FOREIGN_CALLER"]
+                        },
+                        "step": { "type": "string" },
+                        "requested_step": { "type": "string" },
+                        "expected_step": { "type": "string" },
+                        "previous_step": { "type": "string" },
+                        "engine_instructions": { "type": "string" }
+                    }
+                }
+            ]
+        },
+        "step_collect_result_input": {
+            "type": "object",
+            "required": ["name"],
+            "additionalProperties": false,
+            "properties": {
+                "name": { "type": "string" },
+                "step": { "type": "string", "description": "Expected step name (used for staleness detection)." }
+            }
+        },
+        "step_collect_result_output": {
+            "type": "object",
+            "required": ["action"],
+            "additionalProperties": true,
+            "description": "Decision for the orchestrator's next move. Several variants exist; the discriminator is the combination of `action`, `passed`, and presence of `error`/`warning`/`stale`.",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["PROCEED", "RETRY_STEP", "STOP_WORKFLOW", "VERIFY_MANUALLY", "BLOCKED_FOREIGN_CALLER"],
+                    "$comment": "A fresh-spawn RETRY_STEP normally also carries retry_begin (composite driving): the regenerated prompt file (with a Retry Feedback section) + spawn_prompt, spawned verbatim.",
+                    "description": "The three live decisions, plus the ownership refusal (the entry guard returns {error, action, tool} — a worker calling from a foreign engine process). VERIFY_MANUALLY is historical: a foreign verdict is re-validated inline instead of asking for arbitration; kept so old artifacts validate."
+                },
+                "passed": { "type": "boolean" },
+                "step": { "type": "string" },
+                "checks": { "type": "integer", "minimum": 0 },
+                "failures": { "type": "integer", "minimum": 0 },
+                "details": { "type": "array", "items": { "type": "string" } },
+                "loop_count": { "type": "integer", "minimum": 0 },
+                "max_step_retries": { "type": "integer", "minimum": 0 },
+                "needs_semantic_gate": { "type": "boolean" },
+                "needs_human_gate": { "type": "boolean" },
+                "stale": { "type": "boolean" },
+                "warning": { "type": "string" },
+                "error": { "type": "string" },
+                "gate_result": { "type": "object" },
+                "branch_results": { "type": "array" },
+                "failed_branches": { "type": "array" }
+            }
+        },
+        "step_complete_input": {
+            "type": "object",
+            "required": ["name", "step", "summary"],
+            "additionalProperties": false,
+            "properties": {
+                "name": { "type": "string" },
+                "step": { "type": "string" },
+                "summary": { "type": "string", "description": "Brief 2-3 sentence summary of what the step accomplished." }
+            }
+        },
+        "step_complete_output": {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "required": ["step", "workflow_done"],
+                    "additionalProperties": true,
+                    "description": "Step marked complete — plain success (no `action`) or an engine-owned control-flow verdict (`action` set; obey it: LOOP_BACK / ENTER_ROUTE moved the cursor, ENTER_LANES registered the fork's lanes and LANE_WAIT parks a finished lane while siblings run, the AWAITING pair suspends for a decision round-trip).",
+                    "properties": {
+                        "step": { "type": "string" },
+                        "next_step": { "type": ["string", "null"] },
+                        "workflow_done": { "type": "boolean" },
+                        "action": {
+                            "type": "string",
+                            "enum": ["LOOP_BACK", "ENTER_ROUTE", "ENTER_LANES", "LANE_WAIT", "AWAITING_LOOP_DECISION", "AWAITING_ROUTE_DECISION"]
+                        },
+                        "loop": { "type": "object" },
+                        "route": { "type": "object" },
+                        "routes": { "type": "object" },
+                        "route_exit": { "type": "object" },
+                        "lanes": { "type": "object", "description": "ENTER_LANES: the {lane id → first step} map." },
+                        "lanes_exit": { "type": "object", "description": "The join barrier passed: per-lane verdicts; the cursor is already past the fork." },
+                        "engine_instructions": { "type": "string" },
+                        "next_begin": {
+                            "type": "object",
+                            "description": "Composite driving: the admitted next step's complete step_begin payload — present on every successful terminal advance with a known target (plain advance, LOOP_BACK, ENTER_ROUTE); AWAITING_*/error envelopes never carry it. Absent on an advance = degraded compose — call step_begin as before."
+                        },
+                        "lanes_begin": {
+                            "type": "object",
+                            "description": "Composite driving, ENTER_LANES only: one full step_begin payload per lane, keyed by lane id. A lane absent from the map is driven via step_begin."
+                        }
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": ["error", "action"],
+                    "additionalProperties": true,
+                    "description": "Refusal / error envelope — the step is NOT complete. FIX_AND_RETRY (safety-net validation or delegation handoff; `validation_errors` when validation produced them), STOP_WORKFLOW (decider failure), USER_REJECTED / AWAITING_HUMAN_RESPONSE (inbox human gate), BLOCKED_PARTIAL_FAILURE (unresolved branch failures), BLOCKED_FOREIGN_CALLER (ownership guard).",
+                    "properties": {
+                        "error": { "type": "string" },
+                        "action": {
+                            "type": "string",
+                            "enum": [
+                                "FIX_AND_RETRY",
+                                "STOP_WORKFLOW",
+                                "USER_REJECTED",
+                                "AWAITING_HUMAN_RESPONSE",
+                                "BLOCKED_PARTIAL_FAILURE",
+                                "BLOCKED_LANES_FAILED",
+                                "BLOCKED_FOREIGN_CALLER"
+                            ]
+                        },
+                        "step": { "type": "string" },
+                        "validation_errors": { "type": "array", "items": { "type": "string" } },
+                        "message_id": { "type": "string" },
+                        "engine_instructions": { "type": "string" }
+                    }
+                }
+            ]
+        },
+        "workflow_finalize_input": {
+            "type": "object",
+            "required": ["name"],
+            "additionalProperties": false,
+            "properties": { "name": { "type": "string" } }
+        },
+        "workflow_finalize_output": {
+            "type": "object",
+            "required": ["workflow", "status", "trace_finalized", "run_id"],
+            "additionalProperties": true,
+            "properties": {
+                "workflow": { "type": "string" },
+                "status": { "type": "string", "enum": ["completed", "failed"] },
+                "steps": { "type": "object" },
+                "trace_finalized": { "type": "boolean" },
+                "run_id": { "type": "string" }
+            }
+        },
+        "list_agent_files_input": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "path": { "type": "string", "default": ".riglane/" },
+                "pattern": { "type": "string", "description": "Glob pattern (e.g., '*.md')." }
+            }
+        },
+        "list_agent_files_output": {
+            "type": "object",
+            "required": ["files", "count"],
+            "additionalProperties": false,
+            "properties": {
+                "files": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["path", "is_dir"],
+                        "properties": {
+                            "path": { "type": "string" },
+                            "is_dir": { "type": "boolean" }
+                        }
+                    }
+                },
+                "count": { "type": "integer", "minimum": 0 }
+            }
+        }
+    }
+}

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "workflow_engine": {
+      "command": "riglane",
+      "args": ["mcp-server"]
+    },
+    "workflow_tools": {
+      "command": "riglane",
+      "args": ["mcp-tools"]
+    }
+  }
+}

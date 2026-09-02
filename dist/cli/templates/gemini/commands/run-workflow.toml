@@ -1,0 +1,202 @@
+description = "Run a declarative Riglane multi-phase workflow (doc-spec-extraction, spec-audit, registry-sync, or custom from my_workflows/). Orchestrates subagents via the MCP workflow engine with structural gates, trace, and parallel execution."
+
+prompt = '''
+# Riglane run-workflow (Gemini CLI)
+
+Workflow invocation arguments: {{args}}
+
+## FIRST — get the workflow name from the arguments above
+
+**The workflow name is the FIRST token of the arguments.** With `/riglane:run-workflow tools-demo`
+the name is `tools-demo`; with `/riglane:run-workflow doc-spec-extraction --scope aurora` it is
+`doc-spec-extraction` and `--scope aurora` is a param. Read it directly — do NOT ask the user for a
+name that is present, and do NOT call a question tool with empty options. Only if the arguments
+carry NO name: list the directory names under
+`.riglane/workflows/templates/{my_workflows,predefined,examples}/` via the `list_agent_files` MCP tool
+and ask in one short plain sentence.
+
+## You are the ORCHESTRATOR
+
+You drive the run through the MCP workflow engine. For regular steps you spawn subagents; for
+delegation steps you execute the delegated workflow yourself.
+
+`.riglane/local/` is typically gitignored — to DISCOVER runtime files use the `list_agent_files` MCP
+tool (server-side walk); to READ a known file use your read tool with the exact path. Trust the
+gate result — the gate hook already validated outputs server-side.
+
+## MANDATORY: use the MCP workflow engine tools
+
+**Step 0 — find the tools.** On this host every MCP tool surfaces as `mcp_<server>_<tool>`
+(single underscores). Search your tools list for:
+
+| Priority | Pattern | How to call |
+|----------|---------|-------------|
+| 1 | `mcp_workflow_engine_workflow_resolve`, `mcp_workflow_engine_workflow_init`, … | Call directly by that full name |
+| 2 | bare engine tool names (`workflow_resolve`, …) grouped under the `workflow_engine` server | Call by the name your list shows |
+
+Script tools surface as `mcp_workflow_tools_<workflow>__<tool>` — call by the exact listed name;
+pass the arguments its schema defines.
+
+**Step 0.5 — mandatory probe (required before ANY stop).** Call `workflow_resolve` with
+`{"name": "<workflow>"}` even if Step 0 found nothing:
+- Metadata back → MCP is available; continue.
+- Tool absent / "server unavailable" → wait ~20 seconds, retry ONCE.
+- Second failure → STOP. Surface the exact error verbatim; tell the user to check the
+  `workflow_engine` server in `/mcp`, confirm the folder is trusted (project settings load only in
+  a trusted folder), and restart the session (MCP config is read at startup).
+
+**NEVER infer MCP absence from:** resource listings (the engine exposes only TOOLS — an empty
+resources list is expected), `riglane doctor`/`riglane status` (project config ≠ this session), shell-run
+`riglane mcp-server`/`riglane mcp-tools` (separate processes), or an empty name search alone. NEVER
+self-call `riglane run-workflow` (an external launcher that spawns a NEW agent — you are already
+inside one), and NEVER drive the workflow with file/shell tools: a run without the engine has no
+trace, no gate, no audit — there is no "manual" run, only a corrupted one. If a script tool the
+engine reported available is not in your list, it is DEFERRED, not absent — re-check by its full
+`mcp_workflow_tools_…` name first; a session restart (the tools server scans yamls at startup) is
+the fix, and running the underlying script via shell is a genuine LAST resort only
+(`--key=value` args, interpreter per its declared command).
+
+## Engine config errors — surface, do NOT self-fix
+
+On load-time/config errors ("references struct schema(s) that do not exist",
+"contains a literal '_branch_*' segment", "has an invalid configuration",
+"ORCHESTRATOR DIRECTIVE", "STOP_WORKFLOW", "BLOCKED_PARTIAL_FAILURE"): print the error VERBATIM to
+the user and STOP. Do NOT create missing files, edit workflow.yaml, populate structs/, retry, or
+work around via other engine calls — those messages address the workflow AUTHOR, not you.
+
+## Anti-patterns — NEVER do these
+
+- NEVER run `riglane workflow-clear` (or reset/re-init a run) without the user's EXPLICIT permission.
+  A repeatedly failing step is a signal to surface, not to bulldoze.
+- NEVER skip, reorder, or jump over a step, and never offer the user a "skip this step" choice —
+  the engine refuses out-of-order moves (`BLOCKED_OUT_OF_ORDER`); conditional paths are the
+  author's `routes`, not your invention.
+- NEVER invent or guess agent names. `step_begin` returns `subagent_type` — pass it VERBATIM as
+  `invoke_agent`'s `agent_name`. Never substitute a built-in agent (our `riglane-*` agents carry the
+  tool whitelists).
+- NEVER write `manifest.json` / trace / gate-result by hand; NEVER advance without
+  `step_complete`; NEVER assume a gate passed without evidence. `step_collect_result` is
+  decided by the payload's `gate` flags: both false → `step_complete` directly (it
+  validates the verdict itself); either true → collect FIRST, always — never skip
+  collect on a gated step.
+- NEVER mutate `.riglane/local/active-scope` during a run — the engine owns scope threading
+  (snapshot at init, restore at finalize); pass `--scope` as a workflow param instead.
+
+## Startup — new run
+
+1. `workflow_resolve` → metadata (steps, params, gates, tools).
+2. Parse `--param value` arguments. Missing REQUIRED params → ask the user; missing optional
+   params with defaults → use the default silently. Reserved run-level flag `--model
+   <inherit|auto|lightest|strongest>` is NOT a workflow param — pass it to `workflow_init` as the
+   top-level `model_override` argument; an invalid value → surface and stop.
+3. `workflow_init` with name, params, and (if given) `model_override`. Its response normally
+   carries `next_begin` — the FIRST step's complete `step_begin` payload: do NOT call
+   `step_begin` for it; drive from the payload (Step Execution §1).
+   - Existing in-progress run reported → do NOT auto-finalize; tell the user and offer the
+     choice: clear (`riglane workflow-clear <name>`) or resume (`--resume`). Act only after they pick.
+4. `tools.blocked: true` → show `tools.block_message` and STOP (the user must configure the
+   missing MCP servers in `.gemini/settings.json` and restart the session). Missing
+   `required: false` items → warn but continue.
+5. `scope_warning` present → relay it and PAUSE for confirmation (usually a typo; the user can
+   declare the scope with `riglane scope add`).
+6. Tell the user: "Starting workflow <name> (version V). <description>. N steps." → Step Execution.
+
+## Startup — resume (`--resume [<run-id>]`)
+
+`workflow_resume` → state + summaries + next step. Pass a `--resume <run-id>` through as
+`workflow_resume(name, run_id)`; without one the engine takes the LATEST resumable run of
+this workflow, which is the WRONG run when a newer one is alive beside the stalled one the
+user means (an id that does not resolve is refused, never swapped). `completed` current step
+→ `step_complete` then advance; `in_progress` → resume it; `failed` → ask the user. Then
+Step Execution.
+
+## Step execution (for each step, in order)
+
+### 1. Begin
+
+COMPOSITE DRIVING — the payload usually arrives on the PREVIOUS response: when the response
+you already hold (`workflow_init`, `step_complete`) carries `next_begin`, that IS this step's
+full `step_begin` result — do NOT call `step_begin`; use it directly. The same applies per
+lane to `lanes_begin` on `ENTER_LANES` and to `next_begin` on `LOOP_BACK` / `ENTER_ROUTE`.
+A response WITHOUT a payload is the normal protocol: call `step_begin` (always valid — e.g.
+after a resume, or for a lane missing from `lanes_begin`).
+If ANY engine response carries `engine_instructions`, READ it end-to-end and
+FOLLOW it verbatim — additive to this flow unless it explicitly replaces it (planning steps).
+
+Check `type`:
+- `"delegation"` → do NOT spawn; see Delegation below.
+- `"planning"` → `engine_instructions` contains the COMPLETE Step 0-6 procedure; it replaces this
+  flow entirely. Do not paraphrase or look for the procedure elsewhere; if it is missing, STOP.
+- `"regular"` with `subagent: false` → execute the step YOURSELF inline (read goal, do the work,
+  write outputs), then go directly to step 4 — no gate hook fires for inline steps.
+- `"regular"` with `subagent: true` (or absent) → the ENGINE has already composed the FULL
+  task into a prompt file (`prompt_file`), `inject: file` content included — you never read
+  that file and never rebuild text blocks. Use **`spawn_prompt`** from the payload VERBATIM as
+  the subagent's prompt; the payload's `gate` flags decide the collect question (step 3).
+
+### 2. Spawn (subagent steps)
+
+- Regular: `invoke_agent(agent_name=<subagent_type VERBATIM>, prompt=<spawn_prompt VERBATIM>)`.
+- Parallel (`type: "parallel"`): `step_begin` returns branch metadata (`branch_index`,
+  `prompt_file`, `spawn_prompt`, `subagent_type`). For each branch invoke_agent with
+  `branch.spawn_prompt` as the prompt. Do NOT resolve parallel_key yourself; do NOT read the
+  prompt files yourself. On resume, spawn only `pending`/`failed` branches.
+
+### 3. Gate results
+
+> HOW THE GATE WORKS HERE: when the subagent finishes, an AfterTool hook validates its outputs.
+> On FAIL the engine BLOCKS the result — you receive the block reason instead of the subagent's
+> report. There is NO in-session bounce on this host: the retry is a FRESH `invoke_agent` spawn
+> carrying the feedback, and the engine budgets it (gate budget first, then step budget). Call
+> `step_collect_result` when the payload's `gate` flags ask for it (either flag true); with both
+flags false, `step_complete` directly — it validates the verdict itself. Follow every
+response's `engine_instructions`.
+
+`step_collect_result` → check `action`:
+- `PROCEED` → gate passed. `needs_semantic_gate` → verify coherence yourself;
+  `needs_human_gate` → present a summary and ask the user for approval. Then step 4.
+- `RETRY_STEP` → follow the `engine_instructions` in the response VERBATIM. When it carries
+  `retry_begin`, spawn from ITS `spawn_prompt` — the engine regenerated the prompt file with
+  a Retry Feedback section; do NOT reassemble the task yourself. Without `retry_begin`: pass
+  the gate feedback in the new prompt, as before.
+- `STOP_WORKFLOW` → gate infrastructure failure or exhausted budget. STOP immediately; report.
+
+Parallel partial failure: `PROCEED` with `failed_branches: [...]` → re-spawn ONLY the failed
+branches (fresh invoke_agent + that branch's feedback) before `step_complete`, unless
+`gate.allow_partial_step_complete: true`. ALL branches failed → always blocked; re-spawn or abort.
+
+### 4. Complete
+
+`step_complete` with a brief summary (2-3 sentences).
+- `BLOCKED_PARTIAL_FAILURE` → unresolved failures; re-spawn the failing work first.
+- `FIX_AND_RETRY` → inline-step output validation failed; read `validation_errors`, fix the
+  files YOURSELF (inline steps are your work), call `step_complete` again.
+- `LOOP_BACK` / `AWAITING_LOOP_DECISION` / `ENTER_ROUTE` / `AWAITING_ROUTE_DECISION` → engine-owned
+  control flow; obey the attached `engine_instructions` verbatim (the cursor is engine-owned).
+- `workflow_done: false` → proceed to `next_step`; `true` → Finalization.
+
+## Delegation (`type: "delegation"`)
+
+Evaluate any skip conditions in `goal`; check the target is not already in your execution stack;
+`workflow_init` the target with `resolved_params`; run ALL its steps with this same loop; then
+`workflow_finalize` it; then `step_complete` on the PARENT delegation step INCLUDING
+`delegated_run_id: <the child's run_id>`. Delegation is NOT a subagent — YOU run the child. Max
+depth 1 (A→B OK, A→B→C prohibited).
+
+## Finalization
+
+`workflow_finalize` → tell the user: "Workflow <name> completed. All N steps passed." + summary.
+
+## Output file ownership
+
+For subagent steps YOU never write the step's output files — only the subagent does (an output
+you write bypasses the gate). If outputs are missing: retry the subagent with specifics; when
+retries are exhausted, report the gap. Exception: inline steps (`subagent: false`) — there you ARE
+the worker by design, and `step_complete` still validates your outputs.
+
+## Engine file protection
+
+Neither you nor subagents may modify: `.riglane/scripts/`, `.riglane/tools/`,
+`.riglane/workflows/templates/predefined/`, `.gemini/commands/riglane/`, `.gemini/agents/riglane-*`,
+`riglane-workflow-context.md`. Report bugs to the user — never fix engine files mid-run.
+'''

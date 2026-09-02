@@ -1,0 +1,24 @@
+name: module-manifest
+description: Module backlog manifest for the parallel-demo fan-out
+version: 1
+type: object
+required:
+  - modules
+properties:
+  modules:
+    type: array
+    min_items: 2
+    items:
+      type: object
+      required: [path, name, status]
+      properties:
+        path:
+          type: string
+          description: Real module path (contains separators — NOT usable as branch identity)
+        name:
+          type: string
+          pattern: "^[a-z][a-z0-9-]*$"
+          description: Filesystem-safe per-item identity (what branch outputs key on)
+        status:
+          type: string
+          enum: [pending, done]

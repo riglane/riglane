@@ -1,0 +1,80 @@
+{
+    "$schema": "https://json-schema.org/draft-07/schema#",
+    "$id": "riglane-hooks-cursor-v1",
+    "title": "Riglane Hook — Cursor subagentStop Input + Decision Output",
+    "description": "Schemas for the Cursor subagentStop hook contract: the JSON payload Cursor sends via stdin, and the JSON decision the engine writes to stdout.",
+    "definitions": {
+        "input": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "JSON payload Cursor delivers via stdin. Discriminators: cursor_version OR loop_count present.",
+            "required": ["status"],
+            "properties": {
+                "cursor_version": {
+                    "type": "string",
+                    "description": "Cursor version string. Presence implies Cursor host."
+                },
+                "hook_event_name": {
+                    "type": "string",
+                    "description": "Event name (e.g., 'subagentStop'). Cursor 2.6.19+ sends this — NOT a reliable host discriminator on its own."
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["completed", "errored", "cancelled", "unknown"],
+                    "description": "Subagent termination status. Engine MUST process only status='completed'; other values MUST be skipped silently with stdout={}."
+                },
+                "loop_count": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Cursor-managed gate retry counter. 0 = first attempt; increments on each gate retry within the same subagent session. Engine MUST honor max_gate_retries against this value."
+                },
+                "subagent_id": {
+                    "type": "string",
+                    "description": "Cursor subagent identifier. Phantom filter: identifiers starting with 'toolu_' MUST be treated as orchestrator turns and skipped."
+                },
+                "task": {
+                    "type": ["string", "null"],
+                    "description": "Composed task prompt sent to the subagent. Phantom filter: empty/whitespace-only task MUST be skipped. The orchestrator embeds <!--workflow:run_token:UUID--> and (for parallel) <!--workflow:branch:N--> markers in this field."
+                },
+                "summary": {
+                    "type": ["string", "null"],
+                    "description": "Subagent's own summary of what it did."
+                },
+                "agent_transcript_path": {
+                    "type": ["string", "null"],
+                    "description": "Path to subagent transcript (Cursor-provided when available)."
+                },
+                "model": {
+                    "type": ["string", "null"],
+                    "description": "LLM model used by the subagent."
+                },
+                "message_count": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Number of messages in the subagent session."
+                },
+                "tool_call_count": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "modified_files": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Files modified by the subagent."
+                }
+            }
+        },
+        "decision": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "JSON decision the engine writes to stdout. Empty object {} = pass (no retry). Non-empty followup_message = retry with the message shown to the subagent.",
+            "properties": {
+                "followup_message": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Message shown to the subagent to guide a retry. When this field is present and non-empty, Cursor invokes the subagent again with this message; loop_count increments. When omitted or empty, the subagent stops normally."
+                }
+            }
+        }
+    }
+}

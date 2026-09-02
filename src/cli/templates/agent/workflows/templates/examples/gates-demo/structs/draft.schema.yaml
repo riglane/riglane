@@ -1,0 +1,18 @@
+name: draft
+description: gates-demo draft document (the structural-gate contract)
+version: 1
+type: object
+required:
+  - topic
+  - points
+  - confidence
+properties:
+  topic:
+    type: string
+  points:
+    type: array
+    min_items: 3
+  confidence:
+    type: integer
+    minimum: 1
+    maximum: 10

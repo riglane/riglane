@@ -1,0 +1,347 @@
+{
+    "$schema": "https://json-schema.org/draft-07/schema#",
+    "$id": "riglane-trace-v1",
+    "title": "Riglane Trace Event Log",
+    "description": "Schema for <run-id>.trace.json files written by the engine during workflow execution. The trace is the per-run audit log: it records workflow metadata, every subagent invocation, gate results, MCP calls, and aggregates.",
+    "type": "object",
+    "required": [
+        "trace_version",
+        "workflow",
+        "workflow_version",
+        "run_id",
+        "params",
+        "gate_config",
+        "started_at",
+        "status",
+        "steps"
+    ],
+    "additionalProperties": true,
+    "properties": {
+        "trace_version": {
+            "type": "integer",
+            "const": 1,
+            "description": "Schema version. MUST be 1 for this revision of the trace format."
+        },
+        "workflow": {
+            "type": "string",
+            "description": "Workflow name (matches workflow.yaml's `name` field)."
+        },
+        "workflow_version": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Workflow version copied from workflow.yaml at workflow_init."
+        },
+        "run_id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]*-[0-9]{8}-[0-9]{6}-[0-9a-f]{4}$",
+            "description": "Unique run identifier. Format: <workflow-name>-<YYYYMMDD-HHmmss>-<4hex>. Example: 'spec-do-20260314-103025-a3f1'."
+        },
+        "description": {
+            "type": "string",
+            "description": "Optional. Workflow description copied from workflow.yaml at startup."
+        },
+        "context": {
+            "type": "object",
+            "description": "Optional. Context config from workflow.yaml (e.g., {carry_forward: 'summary'})."
+        },
+        "params": {
+            "type": "object",
+            "description": "Workflow params at invocation (runtime values, including the engine-injected run_id and any param_bindings updates applied during the run)."
+        },
+        "param_defs": {
+            "type": "array",
+            "description": "Optional. Param definitions from workflow.yaml (name, description, required) — frozen at workflow_init.",
+            "items": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "description": { "type": "string" },
+                    "required": { "type": "boolean" }
+                }
+            }
+        },
+        "gate_config": {
+            "type": "object",
+            "required": ["structural", "semantic", "human", "max_gate_retries", "max_step_retries"],
+            "additionalProperties": false,
+            "description": "Workflow-level gate configuration as resolved at workflow_init.",
+            "properties": {
+                "structural": { "type": "boolean" },
+                "semantic": { "type": "boolean" },
+                "human": { "type": "boolean" },
+                "max_gate_retries": { "type": "integer", "minimum": 0 },
+                "max_step_retries": { "type": "integer", "minimum": 0 },
+                "allow_partial_step_complete": {
+                    "type": "boolean",
+                    "description": "Opt-in flag for allowing step_complete with parallel partial failures. Default false."
+                }
+            }
+        },
+        "host": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Optional (traces >=2026-07-27). Run environment: which host drives the run (MCP clientInfo) + the orchestrator's CONFIGURED model (best-effort project-config read; null when the host keeps no model pin there).",
+            "properties": {
+                "id": { "type": ["string", "null"] },
+                "client_name": { "type": ["string", "null"] },
+                "client_version": { "type": ["string", "null"] },
+                "orchestrator_model": { "type": ["string", "null"] }
+            }
+        },
+        "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 timestamp with timezone offset. Workflow start."
+        },
+        "completed_at": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "ISO 8601 timestamp. Workflow end. NULL while status='in_progress'."
+        },
+        "status": {
+            "type": "string",
+            "enum": ["in_progress", "completed", "failed", "paused"],
+            "description": "Workflow status."
+        },
+        "total_duration_ms": {
+            "type": ["integer", "null"],
+            "minimum": 0,
+            "description": "Total wall-clock duration in ms. NULL while in_progress."
+        },
+        "total_messages": { "type": "integer", "minimum": 0 },
+        "total_tool_calls": { "type": "integer", "minimum": 0 },
+        "total_modified_files": { "type": "integer", "minimum": 0 },
+        "total_step_duration_ms": { "type": "integer", "minimum": 0 },
+        "warnings": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Optional. Diagnostic warnings collected from gate-check-error.log at finalize."
+        },
+        "total_mcp_calls": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Optional. Count of MCP tool calls (added at finalize)."
+        },
+        "mcp_calls": {
+            "type": "array",
+            "description": "Optional. Ordered list of MCP tool calls made by the orchestrator to the engine.",
+            "items": { "$ref": "#/definitions/mcpCall" }
+        },
+        "total_tool_calls_proxy": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Optional. Count of script-proxy tool calls (added at finalize)."
+        },
+        "tool_calls": {
+            "type": "array",
+            "description": "Optional. Ordered list of script tool calls via _workflow_tools_<name>.py proxy.",
+            "items": { "$ref": "#/definitions/proxyToolCall" }
+        },
+        "steps": {
+            "type": "array",
+            "description": "Per-step trace entries. Order matches workflow.yaml step order.",
+            "items": { "$ref": "#/definitions/step" }
+        }
+    },
+    "definitions": {
+        "resolvedFile": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "A resolved file behind a declared input/output: path + bounded content preview (populated at step_complete).",
+            "properties": {
+                "path": { "type": "string" },
+                "exists": { "type": "boolean" },
+                "size": { "type": "integer", "minimum": 0 },
+                "value_preview": { "type": ["string", "null"] },
+                "truncated": { "type": "boolean" },
+                "binary": { "type": "boolean" }
+            }
+        },
+        "step": {
+            "type": "object",
+            "required": ["name", "index", "status", "invocations"],
+            "additionalProperties": true,
+            "properties": {
+                "name": { "type": "string" },
+                "index": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Zero-based step index in the workflow."
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["pending", "in_progress", "completed", "failed", "skipped"]
+                },
+                "config": {
+                    "type": ["object", "null"],
+                    "additionalProperties": true,
+                    "description": "Snapshot of step config at execution. May be null on synthetic entries.",
+                    "properties": {
+                        "spec_check": { "type": "boolean" },
+                        "subagent": { "type": "boolean" },
+                        "gate": { "type": ["object", "null"] }
+                    }
+                },
+                "goal": { "type": ["string", "null"] },
+                "inputs": {
+                    "type": ["array", "null"],
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": { "type": "string" },
+                            "inject": { "type": "string", "enum": ["file", "file_if_exists", "reference"] },
+                            "struct": { "type": "string" },
+                            "resolved": { "type": "array", "items": { "$ref": "#/definitions/resolvedFile" } }
+                        }
+                    }
+                },
+                "outputs": {
+                    "type": ["array", "null"],
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": { "type": "string" },
+                            "struct": { "type": "string" },
+                            "write_proof": { "type": "string" },
+                            "optional": { "type": "boolean" },
+                            "resolved": { "type": "array", "items": { "$ref": "#/definitions/resolvedFile" } }
+                        }
+                    }
+                },
+                "param_bindings": {
+                    "type": ["object", "null"],
+                    "description": "Param bindings applied at step_complete (param name -> {expr, value}).",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                            "expr": { "type": "string" },
+                            "value": {}
+                        }
+                    }
+                },
+                "started_at": { "type": ["string", "null"], "format": "date-time" },
+                "completed_at": { "type": ["string", "null"], "format": "date-time" },
+                "duration_ms": { "type": ["integer", "null"], "minimum": 0 },
+                "invocations": {
+                    "type": "array",
+                    "description": "Append-only list of subagent invocations. New retries MUST NOT overwrite previous entries.",
+                    "items": { "$ref": "#/definitions/invocation" }
+                },
+                "retry_count": { "type": "integer", "minimum": 0 },
+                "summary": { "type": ["string", "null"] },
+                "prompt_files": {
+                    "type": ["array", "null"],
+                    "items": { "type": "string" },
+                    "description": "Per-branch prompt files for parallel steps."
+                },
+                "note": {
+                    "type": ["string", "null"],
+                    "description": "Diagnostic note — used for synthetic entries (delegation, inline, no-hook)."
+                }
+            }
+        },
+        "invocation": {
+            "type": "object",
+            "required": ["iteration", "completed_at", "duration_ms", "hook_status"],
+            "additionalProperties": true,
+            "properties": {
+                "iteration": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "1-based iteration number within this step."
+                },
+                "retry_type": {
+                    "type": ["string", "null"],
+                    "enum": [null, "gate", "step", "branch"],
+                    "description": "null = first attempt; gate = same-subagent retry via followup_message; step = orchestrator spawned new subagent; branch = parallel branch (not a retry)."
+                },
+                "completed_at": { "type": "string", "format": "date-time" },
+                "duration_ms": { "type": "integer", "minimum": 0 },
+                "hook_status": {
+                    "type": "string",
+                    "enum": ["completed", "errored"],
+                    "description": "From hook input — whether the subagent itself completed or errored before invoking the hook."
+                },
+                "message_count": { "type": "integer", "minimum": 0 },
+                "tool_call_count": { "type": "integer", "minimum": 0 },
+                "modified_files": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Files modified by the subagent during this invocation."
+                },
+                "subagent_id": { "type": ["string", "null"] },
+                "task_prompt": { "type": ["string", "null"] },
+                "subagent_summary": { "type": ["string", "null"] },
+                "transcript_path": { "type": ["string", "null"] },
+                "model": { "type": ["string", "null"] },
+                "token_usage": {
+                    "type": ["object", "null"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "input": { "type": "integer", "minimum": 0 },
+                        "output": { "type": "integer", "minimum": 0 }
+                    }
+                },
+                "followup_message": { "type": ["string", "null"] },
+                "note": { "type": ["string", "null"] },
+                "gate": { "$ref": "#/definitions/gateResult" }
+            }
+        },
+        "gateResult": {
+            "type": "object",
+            "required": ["type", "passed", "checks", "failures", "details"],
+            "additionalProperties": false,
+            "properties": {
+                "type": { "type": "string", "enum": ["structural", "semantic", "human"] },
+                "passed": { "type": "boolean" },
+                "checks": { "type": "integer", "minimum": 0 },
+                "failures": { "type": "integer", "minimum": 0 },
+                "details": { "type": "array", "items": { "type": "string" } }
+            }
+        },
+        "mcpCall": {
+            "type": "object",
+            "required": ["timestamp", "tool", "duration_ms", "success"],
+            "additionalProperties": true,
+            "properties": {
+                "timestamp": { "type": "string", "format": "date-time" },
+                "tool": { "type": "string" },
+                "duration_ms": { "type": "integer", "minimum": 0 },
+                "success": { "type": "boolean" },
+                "workflow": { "type": "string" },
+                "step": { "type": "string" },
+                "summary": { "type": "string" },
+                "error": { "type": "string" }
+            }
+        },
+        "proxyToolCall": {
+            "type": "object",
+            "description": "A tool call captured by the riglane tool-call-logger hook (per-run tool-events.jsonl) and folded into the trace, tagged with the step. Field availability is per-host. Only `tool` is guaranteed. Legacy script-proxy fields remain optional for back-compat.",
+            "required": ["tool"],
+            "additionalProperties": true,
+            "properties": {
+                "tool": { "type": "string" },
+                "tool_short": { "type": "string" },
+                "server": { "type": ["string", "null"] },
+                "kind": { "type": "string", "enum": ["mcp", "script", "builtin", "shell", "read", "other"] },
+                "agent_id": { "type": ["string", "null"] },
+                "agent_type": { "type": ["string", "null"] },
+                "step": { "type": ["string", "null"] },
+                "args": {},
+                "result_preview": { "type": ["string", "null"] },
+                "success": { "type": ["boolean", "null"] },
+                "ts": { "type": "string", "format": "date-time" },
+                "host": { "type": "string" },
+                "corr": { "type": ["string", "null"] },
+                "source": { "type": "string" },
+                "arguments": { "type": "object" },
+                "timestamp": { "type": "string", "format": "date-time" },
+                "duration_ms": { "type": "integer", "minimum": 0 },
+                "exit_code": { "type": "integer" },
+                "output_length": { "type": "integer", "minimum": 0 },
+                "error": { "type": "string" }
+            }
+        }
+    }
+}

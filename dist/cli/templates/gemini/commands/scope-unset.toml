@@ -1,0 +1,17 @@
+description = "Clear the user-level active Riglane scope override and fall back to the project default"
+
+prompt = '''
+# Riglane scope-unset
+
+Remove the user-level scope override. Run via the shell tool:
+
+```
+riglane scope unset
+```
+
+Deletes `.riglane/local/active-scope`; the next command resolves the scope from
+`_scope-config.json` `default_active_scope` or falls back to `generic`. If no override existed
+the command reports "no override to clear" (a no-op, not an error). Relay the output.
+
+Related: `/riglane:scope-set <id>` · `/riglane:scope-show`.
+'''

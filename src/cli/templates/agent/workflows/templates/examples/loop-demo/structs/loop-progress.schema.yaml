@@ -1,0 +1,15 @@
+name: loop-progress
+description: >
+  The loop's progress registry — shared mutable state, OVERWRITTEN every
+  pass by record-result and read by the when.script decider
+  (scripts/check_remaining.py). Invariant: processed + remaining == total.
+format: json
+
+json_schema:
+  required_fields:
+    - field: total
+      type: number
+    - field: processed
+      type: number
+    - field: remaining
+      type: number

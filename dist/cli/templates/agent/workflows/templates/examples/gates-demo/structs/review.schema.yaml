@@ -1,0 +1,18 @@
+name: review
+description: gates-demo review verdict (also under the semantic gate)
+version: 1
+type: object
+required:
+  - verdict
+  - reasons
+  - improved_points
+properties:
+  verdict:
+    type: string
+    enum: [ship, revise]
+  reasons:
+    type: array
+    min_items: 1
+  improved_points:
+    type: array
+    min_items: 3

@@ -1,0 +1,19 @@
+description = "List all available Riglane spec scopes (implicit generic + declared in _scope-config.json)"
+
+prompt = '''
+# Riglane scope-list
+
+Arguments (optional): {{args}}
+
+List the project's available scopes. Run via the shell tool:
+
+```
+riglane scope list [--counts]
+```
+
+The `generic` scope is always listed first and marked `[implicit]`; scopes declared in
+`_scope-config.json` are marked `[config]`. With `--counts` each scope also shows its number of
+spec files. Relay the output.
+
+Related: `/riglane:scope-show` · `/riglane:scope-add <id> "<label>"` · `/riglane:scope-set <id>`.
+'''

@@ -1,0 +1,41 @@
+description = "Propose and author a behavioral spec when a durable or regulatory requirement emerges in discussion — via spec_write (the engine validates, dedups, and mints the id)."
+
+prompt = '''
+# Riglane spec-author
+
+Arguments (optional context): {{args}}
+
+Author a behavioral spec — ONE requirement per file. The Riglane engine owns identity, validation,
+dedup, and the index/registry. You author the CONTENT and call the tool; you never hand-edit
+`_index.json` / `_registry.json` (engine-owned; manual edits are blocked). On this host the spec
+tools surface as `mcp_workflow_engine_spec_write` / `mcp_workflow_engine_spec_search`.
+
+For BULK extraction from a document (many mutually-referencing specs) → recommend
+`/riglane:run-workflow doc-spec-extraction --source ...` instead (it batches via `create_batch`).
+
+## Procedure
+
+1. **Scope.** Write to the active scope by default; promote to `generic` only for a genuinely
+   universal rule (when in doubt: active). Read set = active + generic. Check the active scope's
+   coverage hint (`riglane scope show`) to confirm the requirement belongs HERE; if a non-generic
+   scope has no hint yet, proactively OFFER to add one (`riglane scope hint <scope> "<text>"`).
+2. **Preflight — dedup + domains.** Call `spec_search` for the area/keywords. It returns matching
+   specs AND the current `domains` list. REUSE an existing domain (don't invent a near-synonym);
+   check whether the requirement is already covered.
+3. **Author content.** YAML frontmatter + Markdown body with required sections: Rule Statement /
+   Validation Criteria / Source Reference (Valid/Invalid Examples only when the rule is
+   ambiguous). Keep it TIGHT — a testable one-sentence Rule Statement; never strengthen a source
+   "can/may/should" into a "must". Do NOT write engine-set fields (`spec_id`, `scope`, dates).
+   Format reference: `workflow_learn(topic="spec-format")`.
+4. **Register.** `spec_write(op: "create", scope, content)` — the engine validates, dedups,
+   mints `<domain>-NNN`, and derives the index. Dedup pushback (near-certain hold) → choose:
+   `acknowledge_distinct: true` (genuinely different), abandon (already covered), or
+   `spec_write(op: "update", spec_id: <match>)` (fold into the existing spec). A NEW domain
+   requires a one-line `domain_description` in the frontmatter.
+5. Report the assigned `spec_id`.
+
+## Do NOT
+- Hand-write `_index.json` / `_registry.json`.
+- Add severity / status / tags — no such fields exist (every spec is binding; conditional
+  obligation lives as prose inside the Rule Statement).
+'''

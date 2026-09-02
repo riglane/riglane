@@ -1,0 +1,21 @@
+name: item-result
+version: 1
+description: >
+  Per-branch result written by one `process-items` parallel branch. Each branch
+  writes exactly one of these to its dynamically-named, branch-isolated path.
+type: object
+required:
+  - item
+  - status
+  - detail
+properties:
+  item:
+    type: string
+    description: "The branch item's name (matches a work-manifest item)."
+  status:
+    type: string
+    enum: [done]
+    description: "Always 'done' in this demo."
+  detail:
+    type: string
+    description: "One sentence describing what was simulated."

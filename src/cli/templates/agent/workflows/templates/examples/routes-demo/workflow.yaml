@@ -1,0 +1,239 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# routes-demo — reference + self-test workflow for the `routes` mechanism
+# (conditional forward branching: "alternative steps").
+#
+# What it demonstrates (read top-to-bottom as a tutorial):
+#   1. routes block          — after a step, the engine picks ONE named route
+#                              (or "proceed") via a deterministic when.script
+#                              decider and runs that route's steps in-line.
+#   2. Three alternatives     — `minor` / `major` / `critical`, chosen from the
+#                              {severity} param. Only the chosen route runs;
+#                              the others are never executed.
+#   3. Mixed step kinds        — inline (subagent: false), subagent, and a
+#                              NESTED routing step all appear inside routes.
+#   4. Nested routes + pop-on-tail — the `critical` route ends with a routing
+#                              step (`escalate`) that itself opens a sub-route
+#                              (`hotfix` / `rollback`); because it is the LAST
+#                              step of `critical`, control returns straight to
+#                              the main flow when the sub-route finishes.
+#   5. loop_back INSIDE a route — the `major` route loops `analyze → apply-fix →
+#                              verify` once (route-scoped loop; the engine owns it).
+#   6. return-to-main          — whichever route runs, control returns to the
+#                              main `report` step afterwards.
+#
+# Pick the path with the {severity} param (default: critical — the richest
+# trace). {escalation} (default: hotfix) chooses the nested sub-route under
+# critical. Run each variant and watch the trace viewer's route dividers
+# ("main → route: critical", "route: critical → route: hotfix", "→ main").
+#
+#   /riglane-run-workflow routes-demo                       # critical → hotfix
+#   /riglane-run-workflow routes-demo severity=major        # the in-route loop
+#   /riglane-run-workflow routes-demo severity=minor        # the inline fast path
+#   /riglane-run-workflow routes-demo escalation=rollback   # critical → rollback
+#
+# Full semantics: workflow_learn(topic="routes").
+# ─────────────────────────────────────────────────────────────────────────────
+name: routes-demo
+version: 1
+# Demo files are deliberately schema-free to keep the tutorial focused on the
+# routes mechanics — REAL workflows should declare struct: on machine-read JSON.
+# (This line also demonstrates the lint acknowledgment mechanism.)
+acknowledge_warnings: [json-no-struct]
+description: >
+  Reference and self-test workflow for the `routes` mechanism (conditional
+  forward branching). Classifies an incoming "issue" by {severity}, then the
+  engine routes execution down one of three alternative paths — a fast inline
+  fix (minor), an analyze→fix→verify loop (major), or a deep path that ends in
+  a nested escalation sub-route (critical). Whichever path runs, control
+  returns to a final inline report step. Exercises route selection via a
+  when.script decider, mixed step kinds inside routes, nested routes with
+  pop-on-tail, and a route-scoped loop_back.
+
+params:
+  - name: severity
+    description: >
+      Which alternative to take: "minor", "major", or "critical". Drives the
+      route-on-severity decider. Default "critical" (deepest trace: nested
+      escalation sub-route).
+    required: false
+    default: critical
+  - name: escalation
+    description: >
+      Under the "critical" route, which escalation sub-route to take:
+      "hotfix" or "rollback". Ignored on the minor/major paths.
+    required: false
+    default: hotfix
+
+gate:
+  structural: true
+  semantic: false
+  human: false
+  max_gate_retries: 2
+  max_step_retries: 1
+
+steps:
+  # ── Step 1 (main): classify the issue ───────────────────────────────────────
+  # Seeds the classification file that every route decider reads. Parameterized
+  # so different runs deterministically take different alternatives.
+  - name: classify
+    goal: >
+      Classify the incoming demo "issue". Write data/classification.json
+      EXACTLY as:
+        {"severity": "{severity}", "escalation": "{escalation}",
+         "summary": "<one short sentence describing the simulated issue>"}
+      The severity/escalation values come straight from the run params — the
+      route deciders parse this file mechanically, so copy them verbatim.
+    subagent: true
+    spec_check: false
+    outputs:
+      - path: data/classification.json
+        struct: classification
+
+  # ── Step 2 (main): the routing step ─────────────────────────────────────────
+  # Does a little work of its own, then its `routes` block fires: the engine
+  # runs the when.script decider, picks ONE route by id, and injects that
+  # route's steps into the live run. After the chosen route finishes, control
+  # returns to `report` below (return-to-main).
+  - name: route-on-severity
+    goal: >
+      Write a short triage note to data/triage-note.json:
+        {"routing_on": "severity", "note": "<one sentence on how this will be handled>"}
+      You do NOT choose the path — after this step the engine evaluates the
+      routes block and tells you which route to enter (obey the returned action).
+    subagent: true
+    spec_check: false
+    outputs:
+      - path: data/triage-note.json
+    routes:
+      when:
+        # Deterministic decider — the engine runs it from the project root and
+        # expects {"route": "<id>"|"proceed"} on stdout. `semantic:` (LLM) and
+        # `human: true` (ask the user) are the other decider kinds.
+        script: "python .riglane/workflows/templates/examples/routes-demo/scripts/route_severity.py"
+      define:
+
+        # ── Alternative A: minor → a single inline fix ──
+        - id: minor
+          steps:
+            - name: quick-fix
+              goal: >
+                Apply a trivial fix inline. Write data/resolution.json:
+                  {"path": "minor", "action": "quick-fix", "resolved": true}
+              subagent: false
+              spec_check: false
+              outputs:
+                - path: data/resolution.json
+
+        # ── Alternative B: major → analyze → apply-fix → verify (loops once) ──
+        - id: major
+          steps:
+            - name: analyze
+              goal: >
+                Analyze the issue. Write data/analysis.json:
+                  {"path": "major", "findings": "<one sentence>"}
+              subagent: true
+              spec_check: false
+              outputs:
+                - path: data/analysis.json
+            - name: apply-fix
+              goal: >
+                Apply the fix described by the analysis. Write data/resolution.json:
+                  {"path": "major", "action": "apply-fix", "resolved": true}
+              subagent: true
+              spec_check: false
+              outputs:
+                - path: data/resolution.json
+            - name: verify
+              goal: >
+                Verify the fix. Write data/verify.json:
+                  {"path": "major", "verified": true, "note": "<one sentence>"}
+                After this step the engine may loop back to `analyze` for another
+                pass — obey the returned action (this loop is engine-owned and
+                stays inside the `major` route).
+              subagent: true
+              spec_check: false
+              outputs:
+                - path: data/verify.json
+              loop_back:
+                to: analyze
+                max_iterations: 3
+                when:
+                  script: "python .riglane/workflows/templates/examples/routes-demo/scripts/loop_fixes.py"
+
+        # ── Alternative C: critical → deep analyze, then a NESTED escalation route ──
+        - id: critical
+          steps:
+            - name: deep-analyze
+              goal: >
+                Deeply analyze the critical issue. Write data/analysis.json:
+                  {"path": "critical", "findings": "<one sentence>", "needs_escalation": true}
+              subagent: true
+              spec_check: false
+              outputs:
+                - path: data/analysis.json
+            # `escalate` is the LAST step of the `critical` route AND a routing
+            # step. When its sub-route is chosen, the engine pops the exhausted
+            # `critical` frame (pop-on-tail) and, when the sub-route finishes,
+            # returns straight to the main `report` step.
+            - name: escalate
+              goal: >
+                Decide the escalation path. Write data/escalation-note.json:
+                  {"routing_on": "escalation", "note": "<one sentence>"}
+                The engine then routes into the chosen escalation sub-route.
+              subagent: true
+              spec_check: false
+              outputs:
+                - path: data/escalation-note.json
+              routes:
+                when:
+                  script: "python .riglane/workflows/templates/examples/routes-demo/scripts/route_escalation.py"
+                define:
+                  - id: hotfix
+                    steps:
+                      - name: hotfix-patch
+                        goal: >
+                          Ship an emergency hotfix. Write data/resolution.json:
+                            {"path": "critical/hotfix", "action": "hotfix-patch", "resolved": true}
+                        subagent: true
+                        spec_check: false
+                        outputs:
+                          - path: data/resolution.json
+                  - id: rollback
+                    steps:
+                      - name: rollback-deploy
+                        goal: >
+                          Roll back the bad deploy. Write data/resolution.json:
+                            {"path": "critical/rollback", "action": "rollback-deploy", "resolved": true}
+                        subagent: true
+                        spec_check: false
+                        outputs:
+                          - path: data/resolution.json
+
+  # ── Step 3 (main): report — runs AFTER whichever route was taken ────────────
+  # Inline synthesis. Demonstrates return-to-main: no matter which route ran,
+  # the cursor lands here next. Reads whatever the chosen path produced.
+  - name: report
+    goal: >
+      Summarize the run. Read data/classification.json and data/resolution.json
+      (always present), plus data/analysis.json if it exists, then write
+      data/report.md:
+
+      # routes-demo report
+
+      - severity: <from classification>
+      - path taken: <resolution.path>
+      - action: <resolution.action>
+      - one sentence on which alternative route ran and whether it resolved
+        the issue.
+    subagent: false
+    spec_check: false
+    carry_forward: true
+    inputs:
+      - path: data/classification.json
+        inject: reference
+      - path: data/resolution.json
+        inject: reference
+      - path: data/analysis.json
+        inject: file_if_exists
+    outputs:
+      - path: data/report.md

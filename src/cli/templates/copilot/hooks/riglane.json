@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "hooks": {
+    "subagentStop": [
+      {
+        "type": "command",
+        "bash": "riglane gate-check --host copilot",
+        "powershell": "riglane gate-check --host copilot",
+        "timeoutSec": 120
+      }
+    ],
+    "preToolUse": [
+      {
+        "type": "command",
+        "matcher": "create|edit|str_replace_editor|apply_patch",
+        "bash": "riglane file-guard --host copilot",
+        "powershell": "riglane file-guard --host copilot",
+        "timeoutSec": 30
+      }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "bash": "riglane tool-call-logger --host copilot",
+        "powershell": "riglane tool-call-logger --host copilot",
+        "timeoutSec": 30
+      }
+    ]
+  }
+}

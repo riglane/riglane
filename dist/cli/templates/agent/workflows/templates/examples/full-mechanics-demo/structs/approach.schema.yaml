@@ -1,0 +1,20 @@
+name: approach
+version: 1
+description: >
+  Output of the `plan-approach` planning step's last substep — a small approach
+  note that later steps reference.
+type: object
+required:
+  - strategy
+  - item_count
+  - notes
+properties:
+  strategy:
+    type: string
+    description: "One-line processing strategy."
+  item_count:
+    type: integer
+    description: "How many items the manifest holds."
+  notes:
+    type: string
+    description: "One short note."

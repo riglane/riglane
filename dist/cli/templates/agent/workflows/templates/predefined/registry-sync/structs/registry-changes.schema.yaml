@@ -1,0 +1,77 @@
+name: registry-changes
+description: >
+  Output of the REVIEW step — the human-approved registry change set that
+  REGISTER applies verbatim via spec_link, plus ADVISORY sections the user
+  reviewed but that this workflow does NOT act on (cross-scope moves and
+  domain-structure redesign). Written after the human gate.
+format: json
+
+json_schema:
+  required_fields:
+    - field: workflow
+      type: string
+    - field: reviewed_at
+      type: string
+    - field: target_scope
+      type: string
+    - field: additions
+      type: array
+      description: >
+        APPROVED file→spec links to add. REGISTER calls
+        spec_link(op:add, spec_id, scope, file, role) for each. Empty is legal
+        (nothing new to track).
+    - field: additions[].spec_id
+      type: string
+    - field: additions[].scope
+      type: string
+      description: The spec's scope (spec_link writes to that scope's registry).
+    - field: additions[].file
+      type: string
+    - field: additions[].role
+      type: string
+      enum: [implements, configures, verifies, uses, affects]
+    - field: removals
+      type: array
+      description: >
+        APPROVED stale mappings to drop. REGISTER calls
+        spec_link(op:remove, spec_id, scope, file, reason) for each.
+    - field: removals[].spec_id
+      type: string
+    - field: removals[].scope
+      type: string
+    - field: removals[].file
+      type: string
+    - field: removals[].reason
+      type: string
+      description: Why it is being removed (spec_link requires a non-empty reason).
+    - field: scope_findings
+      type: array
+      description: >
+        ADVISORY (consolidated from SCAN, confirmed at the human gate): specs
+        that appear to belong to a different scope. NOT applied here — recorded
+        for a separate human-driven move. Each: spec_id, current_scope,
+        suggested_scope, rationale.
+    - field: redesign_proposals
+      type: array
+      description: >
+        ADVISORY: domain-structure proposals surfaced when the reconciled
+        corpus shows the current domain layout no longer fits (a domain grown
+        too broad, near-synonym siblings, specs sitting in the wrong domain).
+        NOT applied — the user acts on them separately. Empty when the layout
+        is fine or too few specs to judge.
+    - field: redesign_proposals[].kind
+      type: string
+      enum: [split_domain, merge_domains, rename_domain, move_spec]
+    - field: redesign_proposals[].title
+      type: string
+    - field: redesign_proposals[].affected
+      type: array
+      description: Affected domain names and/or spec ids.
+    - field: redesign_proposals[].rationale
+      type: string
+    - field: redesign_proposals[].suggested_action
+      type: string
+
+file_checks:
+  exists: true
+  min_size: 80

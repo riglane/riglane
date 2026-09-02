@@ -1,0 +1,14 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": [".opencode/riglane/*.md"],
+  "mcp": {
+    "workflow_engine": {
+      "type": "local",
+      "command": ["riglane", "mcp-server"]
+    },
+    "workflow_tools": {
+      "type": "local",
+      "command": ["riglane", "mcp-tools"]
+    }
+  }
+}

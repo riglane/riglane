@@ -1,0 +1,63 @@
+name: validation-report
+description: >
+  Output of the VALIDATE step — the engine batch-preview result
+  (create_batch dry-run) plus the semantic verification the agent performs by
+  reading. Carries a per-draft ready/held verdict that COMMIT consumes: the
+  "ready" set plus acknowledge_distinct_temp_keys are exactly what COMMIT feeds
+  to the real create_batch.
+format: json
+
+json_schema:
+  required_fields:
+    - field: workflow
+      type: string
+    - field: validated_at
+      type: string
+    - field: total_drafts
+      type: number
+    - field: ready_count
+      type: number
+    - field: held_count
+      type: number
+    - field: results
+      type: array
+    - field: results[].temp_key
+      type: string
+    - field: results[].domain
+      type: string
+    - field: results[].draft_path
+      type: string
+    - field: results[].verdict
+      type: string
+      enum: [ready, held]
+      description: >
+        "held" drafts carry held_reason (structural | dangling_ref |
+        dedup_duplicate | semantic_issue | conflict) plus the detail the human
+        needs to adjudicate — for a dedup hold, matched_spec_id and the dedup
+        signals (or, for a candidate-vs-candidate hold, the named temp_key
+        pair). Held drafts stay in data/drafts/, excluded from commit.
+    - field: results[].checks_performed
+      type: array
+      description: >
+        The 6 semantic checks performed on this draft: accuracy, completeness,
+        consistency, traceability, testability, examples. (Cardinality is not
+        gated here — min_items on an array-path applies to the OUTER array in
+        this schema format; "all 6 per draft" is enforced by the step prose and
+        the human gate.)
+    - field: results[].issues
+      type: array
+    - field: acknowledge_distinct_temp_keys
+      type: array
+      description: >
+        temp_keys of drafts the agent (human-confirmed at the gate) judged
+        genuinely distinct from a near-certain existing match. COMMIT passes
+        these to create_batch so they are created rather than held.
+    - field: dropped
+      type: array
+      description: >
+        Drafts judged true duplicates of an existing spec: [{temp_key, reason}].
+        They stay in data/drafts/ and are excluded from the commit batch.
+
+file_checks:
+  exists: true
+  min_size: 100

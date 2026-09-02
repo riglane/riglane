@@ -1,0 +1,59 @@
+name: approved-moves
+description: >
+  Output of the CURATE step — the user-approved subset of ANALYZE's redesign
+  proposals, translated into concrete spec_write operations. APPLY executes each
+  in order via spec_write(op:move / op:rename_domain); the engine owns the whole
+  cascade (re-mint id + file + index + registry + same-scope related_specs).
+  Written after the CURATE human gate. Only proposals reducible to a move/rename
+  appear here — move_spec / split_domain / merge_domains (→ op:move, possibly
+  batch) and rename_domain (→ op:rename_domain). merge_specs / update_spec are
+  content edits, NOT applied by this workflow (they stay advisory).
+format: json
+
+json_schema:
+  required_fields:
+    - field: workflow
+      type: string
+    - field: curated_at
+      type: string
+    - field: scope
+      type: string
+      description: >
+        Scope the operations apply within — MUST equal the analysis report's
+        target_scope. Moves stay in {scope}+generic; this workflow never touches
+        a sibling scope.
+    - field: operations
+      type: array
+      description: >
+        Approved reorganization operations, in the order APPLY must run them.
+        EMPTY is legal — the user curated every proposal away, so APPLY no-ops.
+        Each entry maps to exactly one spec_write call.
+    - field: operations[].op
+      type: string
+      enum: [move, rename_domain]
+      description: >
+        move           → spec_write(op:move): relocate spec(s) to another
+                         domain. Fields: spec_ids (≥1), to_domain, and
+                         to_domain_description when to_domain is NEW.
+        rename_domain  → spec_write(op:rename_domain): rename a whole domain.
+                         Fields: domain (current), new_domain.
+    - field: operations[].source_proposal_kind
+      type: string
+      enum: [move_spec, split_domain, merge_domains, rename_domain]
+      description: >
+        The ANALYZE redesign_proposals[].kind this operation was derived from —
+        for traceability in the trace/summary back to what the user approved.
+    - field: operations[].rationale
+      type: string
+      description: >
+        One line — why this move helps (carried from the approved proposal).
+        Shown in APPLY's summary and the trace.
+
+# Op-specific fields (operations[].spec_ids / to_domain / to_domain_description
+# for op:move; operations[].domain / new_domain for op:rename_domain) are NOT in
+# required_fields — they are polymorphic by `op`. APPLY reads them per-op and
+# spec_write itself validates the args (unknown domain, empty spec_ids, etc.).
+
+file_checks:
+  exists: true
+  min_size: 60

@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "hooks": {
+    "subagentStart": [
+      {
+        "command": "riglane spawn-throttle"
+      }
+    ],
+    "subagentStop": [
+      {
+        "command": "riglane gate-check --host cursor",
+        "loop_limit": 25
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "riglane file-guard --host cursor"
+      }
+    ],
+    "afterMCPExecution": [
+      {
+        "command": "riglane tool-call-logger --host cursor"
+      }
+    ],
+    "afterShellExecution": [
+      {
+        "command": "riglane tool-call-logger --host cursor"
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "command": "riglane tool-call-logger --host cursor"
+      }
+    ]
+  }
+}

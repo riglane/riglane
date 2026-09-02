@@ -1,0 +1,181 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# inbox-demo — reference + self-test workflow for the run inbox (human answers
+# outside the terminal).
+#
+# What it demonstrates (read this file top-to-bottom as a tutorial):
+#   1. human_channel: both  — every human gate here delivers its question to
+#                             the RUN INBOX as well as the terminal. Question
+#                             and answer become durable, engine-owned
+#                             artifacts: <run_dir>/inbox/<message_id>.json.
+#   2. ONE question, PREDEFINED answers — step `pick-direction` posts a single
+#                             message whose request.choices offer three
+#                             predefined directions; offered choices allow the
+#                             pick on their own (response type "choice"), and
+#                             options.respond adds free text ALONGSIDE — the
+#                             terminal is a free-text device by nature, so the
+#                             message allows what the terminal will collect
+#                             and both channels show the same answer set.
+#                             request.recommended tags ONE choice as the
+#                             agent's suggestion — the ENGINE renders the tag
+#                             on every channel (terminal entry + UI badge);
+#                             the agent never decorates a relayed question.
+#   2b. Rules first, forced   — every ask starts with inbox(op:'rules'): the
+#                             engine refuses a message whose rules were not
+#                             fetched THIS pass, even a valid one — the rules
+#                             arrive at the moment of composition.
+#   2c. ONE held ask          — questions travel via inbox(op:'ask'): the
+#                             ENGINE delivers everywhere (native terminal
+#                             dialog on capable hosts), holds the call until
+#                             the answer, records it, and returns it. Hosts
+#                             without dialogs get relay_required — the agent
+#                             relays the presentation and polls, same turn.
+#   3. A GROUP of questions  — step `review-survey` posts ONE grouped message
+#                             (items: accept/reject + a choices pick + free
+#                             text) answered together in ONE exchange; the
+#                             response arrives as items keyed by the ids.
+#   4. Enforcement           — step_complete REFUSES to complete a gated step
+#                             until EVERY message it posted in the current
+#                             pass carries a fresh response
+#                             (AWAITING_HUMAN_RESPONSE). Approvals are
+#                             verified from disk, not taken on faith.
+#   5. Inline + external     — the steps are inline (subagent: false): the
+#                             orchestrator does the work AND the asking. A
+#                             human gate on an inline step is enforced when
+#                             its channel is external|both — the
+#                             inline-agent-gate advisory is acknowledged
+#                             deliberately below (the refusal-driven flow is
+#                             the demo's point).
+#
+# Run:  /riglane-run-workflow inbox-demo
+# While the run waits, answer from the Workflow Studio (Messages section or
+# the dialog on the waiting trace card), from another program:
+#   GET  /api/inbox.json?run=<run_id>          (list the run's messages)
+#   POST /api/inbox/respond                    (body: {run, message_id, type,
+#                                               text?, items?} + token)
+# …or simply answer in the harness terminal — the orchestrator records it.
+# After the run, open <run_dir>/inbox/ — the full Q&A trail is there.
+#
+# The loop_back / routes human deciders take the same field
+# (`when.human_channel`) — this demo keeps to gates for a short run.
+#
+# Full semantics: workflow_learn(topic="inbox").
+# ─────────────────────────────────────────────────────────────────────────────
+name: inbox-demo
+version: 5
+description: >
+  Reference and self-test workflow for the run inbox: human gate questions
+  delivered outside the terminal (human_channel: both) — first a single
+  question with predefined choices plus free text, then a grouped message
+  (items) answered in one exchange — with the engine refusing to complete a
+  gated step until every question posted in the current pass carries a fresh
+  response record.
+
+gate:
+  structural: true
+  semantic: false
+  human: false
+  max_gate_retries: 2
+  max_step_retries: 1
+
+steps:
+  # ── Step 1: ONE question, PREDEFINED answers (request.choices) ─────────────
+  # Inline: the orchestrator is the worker AND the asker. The goal dictates the
+  # exact message, so the demo is deterministic on every host.
+  - name: pick-direction
+    goal: >
+      Ask the user which direction the demo proposal should take, THROUGH THE
+      RUN INBOX, then write the proposal.
+
+      1. Call inbox(op:'rules', name, step) — it returns the message rules and
+         unlocks posting for this pass (a post without it is refused).
+      2. Call inbox(op:'ask') with EXACTLY this content:
+         title: "Which direction for the demo proposal?"
+         body: one sentence explaining that the run is waiting for a pick.
+         request: { action: "pick direction",
+                    choices: ["conservative", "ambitious", "experimental"],
+                    recommended: "conservative" }
+         options: { respond: true }
+         (offered choices allow the pick on their own — the answer arrives as
+         type "choice" with the picked entry in text; options.respond lets
+         the user write a direction of their own instead; recommended tags
+         the suggestion — the engine renders it on every channel)
+      3. The ask is ONE HELD CALL: the engine delivers the question
+         everywhere (on hosts with native dialogs the terminal question is
+         the engine's, not yours), holds until the user answers, records the
+         answer, and returns it — you relay nothing and poll nothing. If it
+         returns relay_required, follow its ordered directive (relay
+         terminal_presentation as plain text FIRST, then poll inbox(op:'check')
+         in the SAME turn, recording a terminal reply via inbox(op:'respond')).
+         If it returns pending, call ask again with the returned message_id.
+      4. Write data/proposal.md — a short markdown proposal (about 5 lines) in
+         the chosen direction (the picked entry, or the user's own words if
+         they answered with free text): a title line, three numbered actions,
+         and a final line quoting the chosen direction verbatim.
+    subagent: false
+    spec_check: false
+    # Deliberate: a human gate on an inline step IS enforced on the external
+    # channel — the advisory below is acknowledged because this refusal-driven
+    # inline flow is exactly what the demo teaches.
+    acknowledge_warnings: [inline-agent-gate]
+    outputs:
+      - path: data/proposal.md
+    gate:
+      structural: true
+      human: true
+      human_channel: both
+
+  # ── Step 2: a GROUP of questions answered in ONE exchange (items) ──────────
+  - name: review-survey
+    goal: >
+      Collect the user's review of data/proposal.md as ONE grouped inbox
+      message, then record the answers.
+
+      1. Call inbox(op:'rules', name, step), then inbox(op:'ask') with
+         EXACTLY this content:
+         title: "Review the demo proposal"
+         body: one sentence pointing at the proposal produced in step 1.
+         items:
+           - { id: "quality", title: "Is the proposal good enough to keep?",
+               options: { accept: true, reject: true } }
+           - { id: "target",  title: "Where would this ship first?",
+               request: { action: "pick target",
+                          choices: ["staging", "production"] } }
+           - { id: "notes",   title: "Anything to add or change?",
+               options: { respond: true } }
+      2. The ask holds until the user answers ALL items together (one native
+         dialog with one field per item on capable hosts); the response
+         carries items keyed by the ids above. On relay_required, follow its
+         directive as in step 1 (the grouped respond call is in
+         terminal_presentation).
+      3. Write data/review.md with three lines, one per item:
+         "<id>: <type> — <text or choice, or '(none)'>".
+    subagent: false
+    spec_check: false
+    acknowledge_warnings: [inline-agent-gate]
+    inputs:
+      - path: data/proposal.md
+        inject: reference
+    outputs:
+      - path: data/review.md
+    gate:
+      structural: true
+      human: true
+      human_channel: both
+
+  # ── Step 3: after the answers — inline synthesis ───────────────────────────
+  - name: record-outcome
+    goal: >
+      Write data/outcome.md with exactly four lines:
+      1. The chosen direction (from step 1's answer).
+      2. The quality verdict and the channel it arrived through (via field).
+      3. The chosen first target.
+      4. The reviewer's notes as a markdown quote (or "(no notes)").
+    subagent: false
+    spec_check: false
+    inputs:
+      - path: data/proposal.md
+        inject: reference
+      - path: data/review.md
+        inject: reference
+    outputs:
+      - path: data/outcome.md

@@ -1,0 +1,19 @@
+name: fail-report
+version: 1
+description: >
+  Output struct for the `fail` route's fail-demo step. It REQUIRES a "verdict"
+  field that the step's goal deliberately omits — so the structural gate fails
+  every pass, exercising the in-session bounce → max_gate_retries →
+  fresh-worker re-spawn → max_step_retries → STOP_WORKFLOW chain. This schema
+  is intentionally "unsatisfiable" given the goal; that is the demonstration.
+type: object
+required:
+  - attempted
+  - verdict
+properties:
+  attempted:
+    type: boolean
+    description: "Always written by the step."
+  verdict:
+    type: string
+    description: "Deliberately omitted by the goal → required-field gate failure."

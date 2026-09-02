@@ -1,0 +1,280 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# loop-demo — reference + self-test workflow for the loop_back mechanism.
+#
+# What it demonstrates (read this file top-to-bottom as a tutorial):
+#   1. loop_back block       — engine-evaluated repetition with a deterministic
+#                              when.script decider and a hard max_iterations
+#                              budget (see the record-result step).
+#   2. Iteration data flow   — BOTH patterns side by side:
+#                                • current-state OVERWRITE (data/scenario-result.json,
+#                                  data/progress.json — rewritten every pass);
+#                                • per-iteration files (per_iteration: true —
+#                                  the engine injects the synthetic {iteration}
+#                                  counter: data/record.json → data/record_{iteration}.json).
+#   3. param_bindings        — `remaining` is piped out of progress.json after
+#                              every gate pass and lands in later prompts.
+#   4. Mixed step kinds      — subagent steps inside the loop, an inline
+#                              (subagent: false) synthesis step after it.
+#   5. TWO loops in one flow — a second cycle (polish → polish-check) runs
+#                              AFTER the first one, with a DISJOINT range.
+#                              Several loops per sequence are allowed as long
+#                              as their ranges are properly nested or fully
+#                              separate; a partial overlap is refused at load.
+#                              This pair also proves the per-loop counter:
+#                              its per-iteration files start at
+#                              polish-note_0.md, they do NOT continue the
+#                              first loop's numbering — {iteration} means the
+#                              innermost loop the step belongs to.
+#
+# As a TEST INSTRUMENT, a full run exercises: per-step subagents + gate hook,
+# struct validation, write_proof, the strict step-order cursor, LOOP_BACK
+# action handling, the loop_back script decider, the {iteration} param
+# (including its per-loop resolution across TWO loops), the disjoint-range
+# rule, and the trace viewer's loop-phase dividers ("Begin Loop Back
+# Phase (N)" / "Exit Loop Phase") for both cycles.
+#
+# Run:  /riglane-run-workflow loop-demo            (defaults to 3 scenarios)
+# After running, open the trace in the trace viewer — the run-scenario /
+# record-result pair should appear once per pass, separated by phase dividers.
+#
+# Full semantics: workflow_learn(topic="loop-back").
+# ─────────────────────────────────────────────────────────────────────────────
+name: loop-demo
+version: 2
+description: >
+  Reference and self-test workflow for the loop_back mechanism. Builds a
+  small plan of demo scenarios, then repeats a two-step cycle
+  (run-scenario → record-result) until every scenario is processed —
+  the engine decides each repetition via a deterministic when.script and
+  enforces the max_iterations budget. Demonstrates both iteration data-flow
+  patterns (overwritten current-state files vs per_iteration output files),
+  param_bindings out of the loop, an inline summary step after it, and a
+  SECOND loop (polish → polish-check) with a disjoint range whose own
+  iteration counter starts from zero.
+
+params:
+  - name: scenarios
+    description: >
+      How many demo scenarios the plan should contain. The loop repeats until
+      all are processed or max_iterations is exhausted — with the default of
+      3 scenarios and max_iterations 5, the loop exits via the script decider
+      (remaining == 0), which is the intended demonstration.
+    required: false
+    default: 3
+
+gate:
+  structural: true
+  semantic: false
+  human: false
+  max_gate_retries: 2
+  max_step_retries: 1
+
+steps:
+  # ── Step 1: runs ONCE, outside the loop range ──────────────────────────────
+  # Seeds the plan and the progress registry the loop consumes. progress.json
+  # is the loop's shared mutable state: record-result rewrites it every pass
+  # and the when.script decider reads it to decide loop vs proceed.
+  - name: prepare-plan
+    goal: >
+      Create the demo work plan. Write TWO JSON files:
+
+      1. data/plan.json — exactly {scenarios} scenarios:
+         {"total": {scenarios},
+          "scenarios": [{"id": 1, "title": "scenario-1"},
+                        {"id": 2, "title": "scenario-2"}, ...]}
+         (ids are 1-based, titles follow the "scenario-<id>" pattern).
+
+      2. data/progress.json — the loop's progress registry, initial state:
+         {"total": {scenarios}, "processed": 0, "remaining": {scenarios}}
+
+      Write both files exactly as specified — later steps and the loop
+      decider script parse them mechanically.
+    subagent: true
+    spec_check: false
+    outputs:
+      - path: data/plan.json
+        struct: loop-plan
+      - path: data/progress.json
+        struct: loop-progress
+
+  # ── Step 2: loop range START ───────────────────────────────────────────────
+  # Demonstrates the OVERWRITE data-flow: scenario-result.json is rewritten on
+  # every pass — each iteration works with the current state, no history.
+  - name: run-scenario
+    goal: >
+      Execute the next pending demo scenario.
+
+      1. Read data/progress.json — let N = processed (0-based index of the
+         next pending scenario).
+      2. Read data/plan.json and take scenarios[N].
+      3. "Execute" it (this is a demo — simulate): compose a result object
+         and OVERWRITE data/scenario-result.json with:
+         {"scenario_id": <id>, "title": "<title>",
+          "status": "passed", "detail": "<one short sentence describing what was simulated>"}
+
+      Do not modify any other file — progress bookkeeping belongs to the
+      next step.
+    subagent: true
+    spec_check: false
+    outputs:
+      - path: data/scenario-result.json
+        struct: scenario-result
+
+  # ── Step 3: loop range END — owns the loop_back block ──────────────────────
+  # Demonstrates: per_iteration outputs (record.json → record_{iteration}.json,
+  # one file per pass, nothing overwritten), the progress registry update, a
+  # param_binding out of the loop, and the loop_back block itself.
+  - name: record-result
+    goal: >
+      Record the scenario result and advance the progress registry.
+
+      1. Read data/scenario-result.json (produced by the previous step).
+      2. Write the per-iteration record file (the engine shows you its exact
+         resolved path in the outputs section — it contains the current
+         iteration number):
+         {"scenario_id": <id>, "title": "<title>", "status": "<status>",
+          "iteration": <the iteration number from the resolved output path>}
+      3. Update data/progress.json: processed += 1, remaining -= 1
+         (total stays unchanged). OVERWRITE the file.
+
+      After this step completes, the ENGINE decides whether to loop back —
+      that decision is not yours: obey the action returned by step_complete
+      (LOOP_BACK → begin the step it names; otherwise proceed normally).
+    subagent: true
+    spec_check: false
+    outputs:
+      - path: data/record.json
+        struct: loop-record
+        per_iteration: true
+      - path: data/progress.json
+        struct: loop-progress
+    param_bindings:
+      remaining: "data/progress.json::remaining"
+    loop_back:
+      to: run-scenario
+      max_iterations: 5
+      when:
+        # Deterministic decider — the engine runs this itself (from the
+        # project root) and expects {"loop": true|false} on stdout.
+        # `semantic:` (LLM judgment) and `human: true` (ask the user) are the
+        # other decider kinds; all configured deciders must agree to loop.
+        script: "python .riglane/workflows/templates/examples/loop-demo/scripts/check_remaining.py"
+
+  # ── Step 4: after the loop — inline synthesis ──────────────────────────────
+  # Inline (subagent: false): pure read-and-summarize work, no spawn cost.
+  # Reads the accumulated per-iteration history via a glob input.
+  - name: summarize
+    goal: >
+      Summarize the whole loop run. Read every per-iteration record
+      (data/record_*.json) and data/progress.json, then write data/summary.md:
+
+      # loop-demo summary
+
+      | iteration | scenario | status |
+      |---|---|---|
+      (one row per record file, ordered by iteration)
+
+      Footer lines:
+      - "processed: <processed>/<total>, remaining: {remaining}"
+      - one sentence stating whether the loop exited because the work ran
+        out (remaining 0) or because max_iterations was reached.
+    subagent: false
+    spec_check: false
+    carry_forward: true
+    inputs:
+      - path: data/record_*.json
+        inject: reference
+      - path: data/progress.json
+        inject: reference
+    outputs:
+      - path: data/summary.md
+
+  # ── Step 5: SECOND loop range START ────────────────────────────────────────
+  # A second cycle in the SAME sequence. Its range [polish .. polish-check] is
+  # DISJOINT from the first one [run-scenario .. record-result] — the two never
+  # interact: the engine's reset is index-bounded and each owner keeps its own
+  # loop_state. The per-iteration file below is the proof: it starts at
+  # polish-note_0.md even though the first loop already ran several passes,
+  # because {iteration} means the counter of the innermost loop CONTAINING the
+  # step, resolved per step at step_begin.
+  - name: polish
+    goal: >
+      Add one review note to the summary produced above.
+
+      Read data/summary.md, then write the per-iteration note file (the engine
+      shows you its exact resolved path in the outputs section — the number in
+      it is THIS loop's counter, which starts at 0):
+
+      # polish note <iteration from the resolved path>
+
+      - one sentence on what reads well in the summary;
+      - one sentence on what a reader would still ask;
+      - the line "notes so far: <how many polish-note_*.md files exist now,
+        including this one>".
+    subagent: true
+    spec_check: false
+    inputs:
+      - path: data/summary.md
+        inject: file
+      - path: data/polish-note_*.md
+        inject: reference
+    outputs:
+      - path: data/polish-note.md
+        per_iteration: true
+
+  # ── Step 6: SECOND loop range END — owns the second loop_back ──────────────
+  - name: polish-check
+    goal: >
+      Confirm the note landed, then let the ENGINE decide whether to polish
+      again.
+
+      1. Read every data/polish-note_*.md file.
+      2. Write data/polish-status.md with exactly two lines:
+         - "notes: <count>"
+         - "last: <the title line of the highest-numbered note>"
+
+      The repetition decision is not yours: obey the action returned by
+      step_complete (LOOP_BACK → begin the step it names; otherwise proceed).
+    subagent: true
+    spec_check: false
+    inputs:
+      - path: data/polish-note_*.md
+        inject: reference
+    outputs:
+      - path: data/polish-status.md
+    loop_back:
+      to: polish
+      max_iterations: 4
+      when:
+        # Second deterministic decider: loop while fewer than 2 notes exist,
+        # so this cycle takes exactly two passes and exits via the script.
+        script: "python .riglane/workflows/templates/examples/loop-demo/scripts/check_polish.py"
+
+  # ── Step 7: after BOTH loops — the honest cross-check ──────────────────────
+  # Reads both loops' per-iteration files and states their numbering, which is
+  # what makes this demo a self-test of the per-loop counter: the polish notes
+  # must start at 0 regardless of how many passes the first loop took.
+  - name: final-report
+    goal: >
+      Write data/final-report.md — the run's cross-check:
+
+      # loop-demo final report
+
+      - "scenario records: <sorted list of the iteration numbers found in
+        data/record_*.json filenames>"
+      - "polish notes: <sorted list of the iteration numbers found in
+        data/polish-note_*.md filenames>"
+      - one line stating whether the polish notes start at 0 (they must — the
+        second loop has its own counter) and what that says about the two
+        loops being independent.
+    subagent: false
+    spec_check: false
+    inputs:
+      - path: data/record_*.json
+        inject: reference
+      - path: data/polish-note_*.md
+        inject: reference
+      - path: data/polish-status.md
+        inject: reference
+    outputs:
+      - path: data/final-report.md

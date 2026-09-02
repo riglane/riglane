@@ -1,0 +1,57 @@
+{
+  "hooks": {
+    "BeforeTool": [
+      {
+        "matcher": "write_file|replace",
+        "hooks": [
+          {
+            "name": "riglane-file-guard",
+            "type": "command",
+            "command": "riglane file-guard --host gemini",
+            "timeout": 30000,
+            "description": "Riglane engine-file protection (pre-write veto)"
+          }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "matcher": "invoke_agent",
+        "hooks": [
+          {
+            "name": "riglane-gate-check",
+            "type": "command",
+            "command": "riglane gate-check --host gemini",
+            "timeout": 120000,
+            "description": "Riglane structural gate (subagent output validation)"
+          }
+        ]
+      },
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "name": "riglane-tool-call-logger",
+            "type": "command",
+            "command": "riglane tool-call-logger --host gemini",
+            "timeout": 30000,
+            "description": "Riglane tool-call ledger"
+          }
+        ]
+      }
+    ]
+  },
+  "mcpServers": {
+    "workflow_engine": {
+      "command": "riglane",
+      "args": ["mcp-server"]
+    },
+    "workflow_tools": {
+      "command": "riglane",
+      "args": ["mcp-tools"]
+    }
+  },
+  "context": {
+    "fileName": ["GEMINI.md", "riglane-workflow-context.md"]
+  }
+}

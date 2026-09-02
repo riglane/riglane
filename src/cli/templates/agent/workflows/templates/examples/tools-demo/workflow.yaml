@@ -1,0 +1,152 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# tools-demo — reference + self-test workflow for workflow TOOLS (script + MCP).
+#
+# What it demonstrates (read top-to-bottom as a tutorial):
+#   1. script tools           — count_lines (node) and transform_json (python):
+#                               colocated under this workflow's scripts/, declared
+#                               with input_schema (args validated before the run),
+#                               executed VERBATIM from the PROJECT ROOT (hence the
+#                               full root-relative command paths).
+#   2. mcp tool dependency     — demo_db: an EXTERNAL MCP server (a real, minimal
+#                               stdio server colocated under mcp/). `expected_tools`
+#                               names the tools a declaring step may USE from it
+#                               (undeclared MCP tools are refused for a step) and
+#                               feeds call attribution; `required: false` = the run
+#                               proceeds (with a note) when the server is absent.
+#   3. per-step tools: DECLARE-TO-USE semantics —
+#                               `tools: [count_lines]` = the step may call ONLY that
+#                               tool (analyze/enrich); a step that calls a workflow
+#                               tool MUST list it (report lists demo_db). Absent
+#                               `tools:` (or `tools: []`) = NO workflow tools,
+#                               built-ins only — absence is the minimal grant,
+#                               like every other absent field in the format. An
+#                               unknown name in the list is a LOAD ERROR.
+#   4. inline step + tool      — `enrich` (subagent: false) calls a tool from the
+#                               orchestrator's own session.
+#
+# FOLLOW-UPS after ADDING a new tool: (1) `riglane init-workflow tools-demo`
+# regenerates the per-step agent files; (2) RESTART the host — the
+# workflow_tools MCP server rescans workflow.yaml only at startup. Until both
+# are done a new tool exists on disk but is INVISIBLE to subagents. A step-level
+# tools: DECLARATION change alone needs neither, and takes effect at the NEXT
+# run start — a run freezes its declarations when it starts, and an undeclared
+# tool is refused at the call.
+#
+# NOT TOOLS: loop_back/routes when.script deciders are engine-run — they need
+# no tools: entry and no follow-ups (see workflow_learn topic "tools").
+#
+# Run:  /riglane-run-workflow tools-demo
+# Full semantics: workflow_learn(topic="tools").
+# ─────────────────────────────────────────────────────────────────────────────
+name: tools-demo
+version: 3
+description: >
+  Reference and self-test workflow for workflow tools. Demonstrates both tool
+  types (script + MCP, incl. a real minimal stdio MCP server colocated under
+  mcp/), both script languages (JS + Python), the declare-to-use per-step
+  tools: semantics, and an inline step calling a tool.
+
+tools:
+  - name: count_lines
+    type: script
+    command: "node .riglane/workflows/templates/examples/tools-demo/scripts/count-lines.mjs"
+    description: "Count lines and characters in a file"
+    input_schema:
+      type: object
+      required: [file_path]
+      properties:
+        file_path:
+          type: string
+          description: "Path to the file to analyze"
+
+  - name: transform_json
+    type: script
+    command: "python .riglane/workflows/templates/examples/tools-demo/scripts/transform-json.py"
+    description: "Transform JSON data: enrich with metadata or summarize"
+    input_schema:
+      type: object
+      required: [input]
+      properties:
+        input:
+          type: string
+          description: "Path to input JSON file"
+        operation:
+          type: string
+          description: "Operation: enrich (default) or summarize"
+
+  # A REAL minimal MCP server (zero-dependency node stdio JSON-RPC loop) —
+  # read mcp/demo-db-server.mjs to see everything an external MCP dependency
+  # involves. required: false → absence degrades gracefully (report notes it).
+  - name: demo_db
+    type: mcp
+    required: false
+    expected_tools: [query_table]
+    server_config:
+      command: "node"
+      args: [".riglane/workflows/templates/examples/tools-demo/mcp/demo-db-server.mjs"]
+
+params:
+  - name: target
+    description: "File to analyze"
+    required: false
+    default: "README.md"
+
+gate:
+  structural: true
+  semantic: false
+  human: false
+
+context:
+  carry_forward: summary
+
+steps:
+  # tools: [count_lines] — the SUBSET form: this step sees ONLY count_lines.
+  - name: analyze
+    tools: [count_lines]
+    goal: >
+      Use the count_lines tool to analyze {target}.
+      Write the result to the output file as JSON with fields:
+      file (string), line_count (number), char_count (number).
+    outputs:
+      - path: data/analysis.json
+        struct: analysis
+
+  # Inline step + tool: the orchestrator itself calls transform_json. The
+  # per-step tools: list is load-bearing here too — declare-to-use is checked
+  # at the call by the workflow_tools server (from declarations frozen at run
+  # start), for inline steps exactly as for subagent steps.
+  - name: enrich
+    tools: [transform_json]
+    subagent: false
+    goal: >
+      Use transform_json tool with operation=enrich on the analysis file.
+      The tool adds _enriched and _field_count fields.
+      Write the enriched result to the output file.
+    inputs:
+      - path: data/analysis.json
+        inject: file
+    outputs:
+      - path: data/enriched.json
+        struct: enriched
+
+  # Declare-to-use: this step calls the demo_db MCP tool, so it lists it.
+  # (An absent tools: would grant NO workflow tools — absence is the minimal
+  # grant; a step gets exactly what it declares.)
+  - name: report
+    tools: [demo_db]
+    goal: >
+      Create a final report combining the enriched analysis data.
+      If demo_db MCP tools are available, use query_table to get
+      related records from the "projects" table. If not available,
+      set db_records to 0 and note "MCP server not available".
+
+      Write the report as JSON with fields:
+      status ("ok"), source (the target file path),
+      line_count (from analysis), db_records (count from DB or 0),
+      summary (brief text description).
+    inputs:
+      - path: data/enriched.json
+        inject: file
+    outputs:
+      - path: data/report.json
+        struct: report

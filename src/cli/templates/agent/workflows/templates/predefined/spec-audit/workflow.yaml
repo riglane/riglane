@@ -1,0 +1,391 @@
+name: spec-audit
+version: 3
+description: >
+  Read-only code-compliance audit: read the source code and measure how far the
+  implementation diverges from its behavioral specs. For each spec, execute the
+  spec's Validation Criteria against the implementing code and report every real,
+  reachable divergence — what it is, how severe the divergence is, and the full
+  code path that produces it. Diagnosis only: NEVER modifies code, specs, or the
+  registry, and never proposes fixes (how to fix is a human decision, carried out
+  in a separate spec-aware implementation pass).
+
+  Supports filtering by scope, domain, spec_id, or applies_to area. With no
+  filter it audits every spec (comprehensive, per-spec).
+
+params:
+  - name: scope
+    description: >
+      Which spec scope to audit — "generic", "all", or a scope id declared in
+      _scope-config.json. Specs live in .riglane/specs/<scope>/<domain>/. The
+      implicit "generic" scope is always included alongside the selected scope
+      (cross-scope invariants apply everywhere). Use "all" to audit every scope in the
+      project. Default: "generic" — safe for projects without scoping. When the
+      project has _scope-config.json and an active scope, consider passing the
+      active scope explicitly for clarity.
+    required: false
+    default: "generic"
+
+  - name: domain
+    description: >
+      Filter the audit to a single domain. If omitted, all domains in the
+      selected scope(s) are audited.
+    required: false
+
+  - name: spec_id
+    description: >
+      Filter the audit to a single spec by spec_id (format "<domain>-NNN").
+      Most specific filter — overrides domain if both are set.
+    required: false
+
+  - name: applies_to
+    description: >
+      Filter to specs whose applies_to overlaps this area (component / module /
+      file hint). Area-level scoping in the new spec model (replaces the old
+      component filter). Matched flexibly (overlap / substring) against each
+      spec's applies_to. If omitted, no area filter is applied.
+    required: false
+
+gate:
+  structural: true
+  semantic: true
+  human: false
+  max_gate_retries: 5
+  max_step_retries: 3
+
+context:
+  carry_forward: summary
+
+# Spec-capability policy — DELIBERATE ZERO spec flags on every step:
+#   - NOT spec_check (it would inject CONSUMPTION guidance — "respect specs when
+#     changing the project" — but the audit changes nothing; it READS and reports).
+#   - NOT spec_authoring (the audit never writes specs).
+# The audit enumerates _index/_registry and spec .md files via plain file inputs
+# (Read) — the sanctioned full-enumerate path. Do not "fix" this by adding flags.
+steps:
+  # ──────────────────────────────────────────────
+  # Step 1: DISCOVER
+  # Resolve the audit set — which specs, which implementing files.
+  # Planning only (no code reading). Human gate before REVIEW fan-out.
+  # ──────────────────────────────────────────────
+  - name: discover
+    spec_check: false
+    goal: >
+      Determine the audit set: which specs to audit and which source files
+      implement each. This is a PLANNING step — resolve paths and metadata; do
+      NOT read source code yet.
+
+      **This workflow is PURE READ-ONLY** — it never creates, modifies, or
+      deletes anything outside the workflow data/ directory.
+
+      **Step-by-step:**
+
+      1. Enumerate specs from the spec index (reading the whole _index.json is
+         the sanctioned full-enumerate path — an audit lists everything):
+         - If scope == "all": read .riglane/specs/_scope-config.json (if present) to
+           enumerate every declared scope; always include "generic".
+         - Otherwise the scope set is [<scope>, "generic"] (deduped).
+         - For each scope in the set, read .riglane/specs/<scope>/_index.json to get
+           its active specs (spec_id, domain, title, summary, path). Merge into
+           one catalog, annotating each entry with its source scope.
+         - If no scope yields any specs: report "No specs found in scope(s)
+           [<set>] — run doc-spec-extraction or author specs first." Write a
+           discovery-plan with an empty domains array + a warning; REVIEW will
+           produce an empty audit.
+
+      2. Apply audit-scoping filters (most specific wins):
+         - spec_id set → that single spec (if not found, list the 3 closest and
+           STOP — ask the user to clarify).
+         - else domain set → all specs in that domain.
+         - else applies_to set → specs whose applies_to overlaps the given area.
+         - else → include ALL active specs.
+
+      3. Discover the implementing code per spec — the registry is a HINT, not
+         the only channel:
+         - Read .riglane/specs/<scope>/_registry.json for each scope in the set;
+           collect the spec's implemented_by files (all roles). Set
+           registry_status: "mapped" / "no_registry_mapping" /
+           "no_implementation_files".
+         - ALWAYS also area-search the codebase for code matching the spec's
+           applies_to (and component-name variants: PascalCase / kebab-case /
+           snake_case), excluding node_modules/, .riglane/, .cursor/, dist/, build/.
+           Union the registry files with the area-search hits — a spec with no
+           registry mapping is still audited from the area-search.
+
+      4. Group specs by domain. For each domain produce: name, status "pending",
+         the specs to audit (spec_id, source_scope, title, spec_file,
+         implementation_files, registry_status), estimated_files.
+
+      5. Produce a discovery-plan.json: target_scope, scopes_audited, filters,
+         summary (total specs / domains / files), domains, and warnings (specs
+         with no implementation found, etc.).
+
+      Present a clear summary of what will be audited.
+    subagent: true
+    inputs:
+      - path: ".riglane/specs/_scope-config.json"
+        inject: file_if_exists
+      - path: ".riglane/specs/{scope}/_index.json"
+        inject: file_if_exists
+      - path: ".riglane/specs/{scope}/_registry.json"
+        inject: file_if_exists
+      - path: ".riglane/specs/generic/_index.json"
+        inject: file_if_exists
+      - path: ".riglane/specs/generic/_registry.json"
+        inject: file_if_exists
+    outputs:
+      - path: "data/{run_id}-discovery-plan.json"
+        struct: discovery-plan
+    gate:
+      structural: true
+      human: true
+
+  # ──────────────────────────────────────────────
+  # Step 2: REVIEW
+  # Parallel per-domain pass. Execute each spec's Validation Criteria against
+  # the implementing code — TRACING the actual bodies to find real, reachable
+  # divergences (heavy code reading lives here, in the disposable per-domain
+  # subagent context — NOT in the orchestrator). READ-ONLY. VERIFY independently
+  # re-checks these findings + a sample of the compliant verdicts.
+  # ──────────────────────────────────────────────
+  - name: review
+    spec_check: false
+    goal: >
+      For the assigned domain, check whether the implementing code complies with
+      each spec by EXECUTING the spec's Validation Criteria against that code.
+
+      **READ-ONLY** — never modify any source, spec, or registry file. Read and
+      report only.
+
+      **For EACH spec in this domain:**
+
+      1. Read the spec file (.riglane/specs/<source_scope>/<domain>/<spec_id>.md).
+         The behavioral rule is its ## Rule Statement (ONE rule per spec — there
+         is no severity and no ## Requirements bullet list). ## Validation
+         Criteria say WHAT to verify, WHERE to look, and what to EXCLUDE.
+      2. Read the implementing source files listed for this spec in the
+         discovery plan. If the spec had no registry mapping, area-search the
+         codebase for its applies_to area (exclude node_modules/, .riglane/,
+         .cursor/, dist/, build/). **TRACE, do not skim:** read the BODIES of the
+         functions/methods that carry the spec's behavior — follow at least one
+         level of call depth, opening other files as needed. A method named SetX
+         may append rather than replace; SendMsg may swallow errors — you cannot
+         know without reading the body. This heavy reading belongs HERE, in your
+         isolated per-domain context.
+      3. EXECUTE the Validation Criteria against the code and classify
+         compliance:
+         - compliant     — the code satisfies the Rule Statement. Say this ONLY
+           after reading the implementing body (never from the call site alone),
+           and name the detail that proves it (e.g. "SetX at file.ext:42 appends
+           rather than replaces, so recovered data is preserved"). A compliant
+           verdict is an evidenced claim, not "looks fine".
+         - violation     — the code clearly diverges from it.
+         - partial       — some cases satisfied, others not.
+         - unverifiable  — cannot be determined from static reading alone
+           (runtime behavior, external dependency, or implementation not found).
+      4. A divergence is a REAL, REACHABLE functional path that violates the
+         Rule Statement (per the Validation Criteria's EXCLUDE clause) — NOT a
+         keyword/pattern match. If the pattern exists but the occurrence is
+         unreachable or structurally inert (dead code, a precondition never
+         met), it is NOT a divergence.
+      5. For each violation/partial, record a divergence: spec_id, a
+         divergence_severity label (not_implemented = behavior entirely absent;
+         partial = a real incomplete gap; edge_case = a narrow missed case),
+         file + line, a short code snippet (≤5 lines), and the traced path — how
+         the code reaches the divergence (the bodies you read, not "line X
+         matched"). Find the REAL divergences here: VERIFY independently
+         re-checks your work (and samples your compliant verdicts), but it is a
+         second opinion, not a safety net for a shallow review.
+
+      Produce a review-result JSON for this domain: domain, specs_checked,
+      counts (compliant / violation / partial / unverifiable), results[] (per
+      spec: spec_id, title, status), and divergences[] (the provisional findings).
+    subagent: true
+    parallel: true
+    parallel_key: "discovery-plan.domains[status=pending]"
+    # Stagger spawn to populate prompt cache in the first subagent before
+    # siblings spawn — prevents the API rate-limit class from triggering when
+    # 6+ subagents start at once. 5000ms suits a moderate per-domain spec+source
+    # corpus; raise to 7000-10000ms if a slower/stronger model tier is picked
+    # and the corpus is large.
+    parallel_spawn_delay_ms: 5000
+    inputs:
+      - path: "data/{run_id}-discovery-plan.json"
+        struct: discovery-plan
+      - path: ".riglane/specs/{scope}/{domain}/*.md"
+        inject: file
+      - path: ".riglane/specs/generic/{domain}/*.md"
+        inject: file_if_exists
+    outputs:
+      # Per-branch identity via {parallel_key.name} (the domain name of THIS
+      # branch's item) — NOT the {domain} filter param (one value → all branches
+      # would collide). Engine fills it; downstream reads data/reviews/{run_id}-*-…
+      - path: "data/reviews/{run_id}-{parallel_key.name}-review-result.json"
+        struct: review-result
+
+  # ──────────────────────────────────────────────
+  # Step 3: VERIFY
+  # Independent depth pass — a SUBAGENT (model: inherit → same tier as the
+  # orchestrator, but a FRESH, disposable context so the heavy body-reading does
+  # NOT bloat the orchestrator). Re-checks every divergence AND a sample of the
+  # compliant verdicts (the false-negative net), reclassifies, finalizes
+  # severity, writes the full code path. Always runs.
+  # ──────────────────────────────────────────────
+  - name: verify
+    # verified-results is deliberately free-form (rich per-finding prose paths);
+    # REPORT consumes it in full — struct validation would add noise, not safety.
+    acknowledge_warnings: [json-no-struct]
+    spec_check: false
+    subagent: true
+    # inherit → the strongest tier available (same as the orchestrator), but in a
+    # disposable subagent context. Depth verification is heavy code reading; it
+    # must NOT accumulate in the long-lived orchestrator context.
+    model: inherit
+    goal: >
+      Independently verify REVIEW's findings by reading the real implementations —
+      you are a fresh pair of eyes at full model strength. REVIEW traced too, but
+      an independent re-read catches both false positives (flagged but actually
+      compliant) AND false negatives (marked compliant but actually diverging).
+
+      **READ-ONLY.** Process items ONE BY ONE — a full read-analyze-classify
+      cycle per item before the next (do NOT batch-read and assess from memory).
+
+      **Step-by-step:**
+
+      1. Collect from the review-result files: (a) every divergence
+         (violation/partial), and (b) the compliant verdicts. Build a VERIFY set
+         = ALL divergences + a SAMPLE of the compliant ones (the false-negative
+         net): at least ~1 in 4 compliant specs, always including any whose Rule
+         Statement is high-stakes (data loss, recovery, money/'safety'-critical)
+         or whose compliant note looked thin. Note which items are "divergence"
+         vs "compliant-sample" — they reclassify into different buckets (step d).
+
+      2. For item N of M:
+         a. Read the source at the reported location.
+         b. **TRACE every function/method call involved in the flagged
+            behavior** — find and READ each implementation body in the actual
+            source file (not just its declaration/interface), following at least one level
+            of call depth. A method named SetX may append rather than replace;
+            SendMsg may swallow errors — you cannot know without reading the
+            body. If the implementation is in another file, you MUST open it.
+         c. Read the spec's Rule Statement + Validation Criteria.
+         d. Reclassify with full knowledge — the bucket depends on the item:
+            For a DIVERGENCE item (REVIEW said violation/partial):
+            - confirmed      — a real, reachable divergence remains after reading
+              the implementation.
+            - false_positive — the code actually complies; name the
+              implementation detail that proves it (e.g. "SetX at file.ext:42
+              appends rather than replaces, so empty input is a no-op — recovered
+              data is preserved").
+            - inconclusive   — undeterminable even after reading (runtime state,
+              external system, or configuration not visible in code).
+            For a COMPLIANT-SAMPLE item (REVIEW said compliant — the
+            false-negative net):
+            - compliant_confirmed — the code really does satisfy the rule.
+            - missed_violation    — REVIEW was WRONG: a real, reachable
+              divergence it missed. Treat it exactly like a confirmed divergence
+              (write the full deliverable in step e) and flag that REVIEW marked
+              it compliant.
+            - inconclusive        — as above.
+         e. For confirmed AND missed_violation, write the deliverable:
+            (a) what the divergence is — detailed;
+            (b) finalize divergence_severity (not_implemented | partial |
+                edge_case);
+            (c) the full code/mechanism PATH — traced and accessibly explained
+                (the route that produces the divergence, not "line X matched a
+                pattern").
+            Do NOT propose a fix — audit is diagnosis, not remediation.
+         f. Print a one-line status: "[N/M] spec_id — verified_status".
+
+      3. Produce a verified-results JSON:
+         - counts: confirmed, false_positive, inconclusive, compliant_confirmed,
+           missed_violation
+         - findings: array of ALL reviewed items, each with spec_id, domain,
+           divergence_severity, what, path, file, line, original REVIEW status,
+           verified_status (confirmed | false_positive | inconclusive |
+           compliant_confirmed | missed_violation), verification_note.
+           A missed_violation carries the full divergence deliverable — REPORT
+           counts it as a real divergence.
+         - compliant_passthrough / unverifiable_passthrough: spec_ids REVIEW
+           marked compliant / unverifiable that were NOT in the sample (passed
+           through un-re-verified)
+
+      4. Print a brief summary: "Verified N divergences + M compliant samples.
+         Confirmed: X, False positives: Y, Missed violations: Z, Inconclusive: W."
+    inputs:
+      - path: "data/reviews/{run_id}-*-review-result.json"
+        inject: reference
+      - path: "data/{run_id}-discovery-plan.json"
+        inject: reference
+    outputs:
+      - path: "data/{run_id}-verified-results.json"
+
+  # ──────────────────────────────────────────────
+  # Step 4: REPORT
+  # Consolidate into a single structured audit document. Diagnosis only.
+  # ──────────────────────────────────────────────
+  - name: report
+    spec_check: false
+    goal: >
+      Consolidate everything into one structured audit DOCUMENT.
+
+      **READ-ONLY** outside the workflow data/ directory.
+
+      **Sources:** the verified-results JSON (from VERIFY — authoritative: a
+      divergence is any item with verified_status "confirmed" OR
+      "missed_violation" [a compliant verdict VERIFY overturned — a REVIEW
+      false-negative]; EXCLUDE false_positive; compliant_confirmed stays
+      compliant; mark inconclusive separately) and the review-result files (for
+      the remaining compliant/unverifiable items and the spec/domain catalog).
+
+      **Step-by-step:**
+
+      1. Aggregate: total specs / domains / files; compliance counts
+         (compliant / violation / partial / unverifiable) + compliance_rate; a
+         divergence_breakdown by DEGREE (not_implemented / partial / edge_case).
+         This is divergence severity — there is NO spec-obligation severity.
+      2. Build divergences[]: one entry per CONFIRMED divergence AND per
+         MISSED_VIOLATION (both are real, reachable divergences) — spec_id,
+         domain, divergence_severity, (a) what (detailed), a structured file
+         (the audited source file — clickable WHERE) plus line when the
+         divergence is tied to a specific line, and (c) path (the full traced
+         mechanism route, accessibly explained — the HOW). NO fix. Mark a
+         missed_violation so the reader sees REVIEW had called it compliant.
+         Order by domain, then by divergence_severity (not_implemented first).
+      3. Per-domain summaries: compliance_rate, divergences_count.
+      4. (Optional) coverage side-note: specs with no implementation found or
+         dangling registry file references — spec↔code linkage health.
+      5. Write the audit-report JSON to data/, including top-level
+         report_version (1) and run_id (this run) so the report viewer is
+         self-contained (no filename parsing). Every divergence carries its
+         structured file (+ line when pinpointable) for clickable navigation
+         alongside the prose path.
+      6. Print a human-readable SUMMARY:
+
+         ── SPEC AUDIT REPORT ──
+         Scope: {scope param} → {scopes_audited}
+         Coverage: {N} specs across {M} domains
+         Filters: {applied filters}
+
+         COMPLIANCE: compliant N (X%) · violation N · partial N · unverifiable N
+
+         DIVERGENCES BY DEGREE:
+         not_implemented N · partial N · edge_case N
+
+         TOP DIVERGENCES (up to 10):
+         1. [not_implemented] {spec_id}: {brief} — {file}:{line}
+         2. ...
+
+         PER-DOMAIN: {domain}: {compliance%} — {N divergences}
+
+      Diagnosis only — do NOT prescribe fixes.
+    subagent: true
+    inputs:
+      - path: "data/{run_id}-verified-results.json"
+        inject: file_if_exists
+      - path: "data/reviews/{run_id}-*-review-result.json"
+        inject: reference
+      - path: "data/{run_id}-discovery-plan.json"
+        inject: reference
+    outputs:
+      - path: "data/{run_id}-audit-report.json"
+        struct: audit-report

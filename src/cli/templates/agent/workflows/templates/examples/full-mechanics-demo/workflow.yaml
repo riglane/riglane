@@ -1,0 +1,458 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# full-mechanics-demo — the "kitchen sink" reference + system-validation workflow.
+#
+# ONE workflow that exercises (nearly) every Riglane mechanic, so a single run
+# validates the engine end-to-end on any integration (Claude Code / Cursor /
+# Codex), demonstrates the system to newcomers, and catches regressions when the
+# engine changes. Read it top-to-bottom as a tutorial.
+#
+# What it demonstrates:
+#   1. script tool          — generate_manifest (a colocated python tool). TWO
+#                             contrasting steps: `seed` declares it but its output
+#                             is guessable, so a worker may fabricate without
+#                             calling it (engine emits a non-fatal "declared but
+#                             never called" tool_warning — a cross-host observation
+#                             point; the engine never FORCES a call). `confirm-tool`
+#                             requires an unguessable token from the tool, so it
+#                             proves a real tool round-trip (no warning = called).
+#   2. dynamic planning      — `plan-approach` (type: planning): the orchestrator
+#                             drafts a small child workflow at runtime.
+#   3. subagent + parallel    — `process-items` fans out one branch per pending
+#                             work item (parallel_key filter) with DYNAMIC,
+#                             per-branch output paths.
+#   4. inline step            — `aggregate` and `report` (subagent: false) run in
+#                             the orchestrator, no spawn.
+#   5. loop_back              — `refine`→`record` repeat under an engine-evaluated
+#                             when.script decider + max_iterations budget;
+#                             per_iteration outputs + param_bindings.
+#   6. routes                 — `decide` branches into one of `deep` / `fail` /
+#                             `proceed` via a when.script decider, then returns
+#                             to the main `report` step.
+#   7. gate failure chain     — the `fail` route (mode=fail) intentionally fails
+#                             the structural gate to exercise in-session bounce →
+#                             max_gate_retries → fresh-worker re-spawn →
+#                             max_step_retries → STOP_WORKFLOW.
+#   8. gate hooks             — every subagent step fires the SubagentStop gate
+#                             hook (the structural gate); inline steps validate
+#                             via the engine-inline safety net.
+#   9. inputs: every mode      — inject: file (full content), reference (path
+#                             only), file_if_exists (optional), and globs.
+#  10. struct validation       — outputs with `struct:` are schema-checked; some
+#                             outputs are deliberately struct-less to show both.
+#
+# DYNAMIC OUTPUT PATHS — the lesson (see the `process-items` step):
+#   • {param} (e.g. {run_id}, {scope}) → the engine resolves it; SAME value for
+#     every branch (null/unset → '' : the segment collapses / leaves a gap).
+#   • {parallel_key.<field>} (here {parallel_key.name}) → THE per-branch value:
+#     the engine fills it from each branch's item, giving each branch a distinct
+#     path/name. The subagent NEVER fills a placeholder itself — it writes to the
+#     concrete path the engine hands it. (Full rules: workflow_learn topic
+#     "parallel".)
+#   • {} → an explicit branch-index slot (_branch_N), stripped at merge; a bare
+#     glob (data/x/*.json) lets the engine isolate + merge flat. NEVER write a
+#     literal `_branch_*` segment yourself (the authoring validator rejects it).
+#   • per_iteration outputs: author `path: data/record.json` + `per_iteration: true`
+#     and the engine injects the {iteration} counter — do NOT write {iteration}
+#     yourself.
+#   • bare-relative paths (data/...) resolve under the run's runtime dir;
+#     root-relative paths (.riglane/...) resolve from the project root.
+#
+# Run it:
+#   /riglane-run-workflow full-mechanics-demo                  # clean full run (proceed)
+#   /riglane-run-workflow full-mechanics-demo mode=deep        # take the multi-step route
+#   /riglane-run-workflow full-mechanics-demo mode=fail        # exercise the gate-fail → STOP chain
+#   /riglane-run-workflow full-mechanics-demo items=5 refine_passes=3
+#
+# After a run, open the trace viewer: planning card, parallel branch fan-out,
+# loop-phase dividers, route dividers, and (mode=fail) the retry/STOP markers.
+#
+# NOTE: external MCP tool dependencies (type: mcp) are intentionally NOT shown
+# here — the engine cannot start external MCP servers (the host does, from its
+# own mcp config), so a real external-MCP demo needs per-integration manual
+# setup. That is covered in a separate document, not in this self-contained run.
+#
+# Full semantics: workflow_learn(topic="overview") and the per-mechanic topics
+# (planning, parallel, loop-back, routes, tools, outputs).
+# ─────────────────────────────────────────────────────────────────────────────
+name: full-mechanics-demo
+version: 1
+# Demo outputs are deliberately schema-free (mechanics tour, not data contracts) —
+# REAL workflows should declare struct: on machine-read JSON. (Demonstrates the
+# lint acknowledgment mechanism.)
+acknowledge_warnings: [json-no-struct]
+description: >
+  The "kitchen sink" reference and system-validation workflow: a single run
+  exercises script tools, dynamic planning, parallel subagent fan-out with
+  dynamic per-branch output paths, inline steps, an engine-evaluated loop_back
+  with per_iteration outputs and param_bindings, conditional routes, and an
+  opt-in intentional gate failure that drives the full retry → STOP_WORKFLOW
+  chain. Use it to validate the engine across integrations and to catch
+  regressions when the engine changes.
+
+params:
+  - name: items
+    description: >
+      How many work items the manifest contains — i.e. how many parallel
+      branches `process-items` fans out. Default 3.
+    required: false
+    default: 3
+  - name: refine_passes
+    description: >
+      How many times the refine→record loop repeats. The loop's max_iterations
+      is the independent hard ceiling. Default 2.
+    required: false
+    default: 2
+  - name: mode
+    description: >
+      Which route `decide` takes: "proceed" (default — straight to report),
+      "deep" (a multi-step analyze→resolve route), or "fail" (intentionally
+      fail the gate to exercise the retry → STOP_WORKFLOW chain).
+    required: false
+    default: proceed
+
+gate:
+  structural: true
+  semantic: false
+  human: false
+  max_gate_retries: 3
+  max_step_retries: 1
+
+tools:
+  # Script tool — colocated python, referenced from the project root (the path
+  # is the same on every integration). Demonstrates the script-tool mechanic:
+  # the subagent calls it, gets JSON back, and writes the output files.
+  - name: generate_manifest
+    type: script
+    command: "python .riglane/workflows/templates/examples/full-mechanics-demo/scripts/generate_manifest.py"
+    description: >
+      Build the demo work manifest deterministically. Arg: count (int). Returns
+      JSON {"total": <count>, "items": [{"name": "item-01", "status": "pending"}, ...]}.
+    input_schema:
+      type: object
+      required: [count]
+      properties:
+        count:
+          type: integer
+          description: "How many work items to generate."
+
+steps:
+  # ── Step 1: seed (subagent + script tool) ──────────────────────────────────
+  # Builds the manifest the parallel step fans out over. Uses the generate_manifest
+  # script tool so the data is deterministic (no LLM invention). The output's
+  # struct name `work-manifest` is what the parallel_key below references.
+  - name: seed
+    subagent: true
+    spec_check: false
+    tools: [generate_manifest]
+    goal: >
+      Build the work manifest for this run.
+
+      1. Call the generate_manifest tool with count = {items}.
+      2. Write its returned JSON verbatim to data/work-manifest.json — it already
+         conforms to the work-manifest struct (a "total" number and an "items"
+         array of {"name", "status": "pending"}).
+
+      Do NOT invent items by hand — the tool is the source of truth so the run
+      is reproducible.
+    outputs:
+      - path: data/work-manifest.json
+        struct: work-manifest
+        write_proof: required
+
+  # ── Step 1b: confirm-tool (subagent) — script tool ACTUALLY exercised ───────
+  # Contrast with `seed`: there the manifest is guessable, so a worker can (and
+  # often does) fabricate it WITHOUT calling the tool — the engine then emits a
+  # non-fatal "declared but never called" tool_warning (intentionally left as a
+  # cross-host observation point). Here the tool returns a `token` the worker
+  # CANNOT know without calling it, so producing the output requires a real call.
+  # Confirmation that the tool ran = NO tool_warning on this step in the trace.
+  # NOTE: the engine never FORCES a declared tool to be called (declared ≠
+  # mandatory — conditional tool use is legitimate); this step forces it only via
+  # the DATA (the unguessable token), not via any engine policy.
+  - name: confirm-tool
+    subagent: true
+    spec_check: false
+    tools: [generate_manifest]
+    goal: >
+      Confirm the generate_manifest script tool is actually reachable from this
+      step (unlike `seed`, whose output is guessable and can be fabricated).
+
+      1. Call the generate_manifest tool with count = {items}.
+      2. Its returned JSON includes a "token" field — a value you CANNOT know
+         without calling the tool. Write data/tool-proof.json EXACTLY as:
+         {"token": "<the exact token the tool returned>"}.
+
+      Do NOT invent a token — you must call the tool to obtain it. If the tool is
+      not available to you at all, STOP and report that — its absence is itself a
+      finding (it means script tools are not reaching this host's workers).
+    outputs:
+      - path: data/tool-proof.json
+        struct: tool-proof
+        write_proof: required
+
+  # ── Step 2: plan-approach (dynamic planning) ───────────────────────────────
+  # The orchestrator drafts a small child workflow at runtime to analyze the
+  # manifest and produce an approach note. Planning steps declare NO outputs —
+  # the LAST substep writes the agreed file (data/approach.json) that later
+  # steps read. Inputs use inject: file (full content in the prompt).
+  - name: plan-approach
+    type: planning
+    subagent: true
+    spec_check: false
+    max_substeps: 4
+    max_plan_attempts: 2
+    goal: >
+      Plan how this run will process its work items.
+
+      data/work-manifest.json is a declared input of THIS step (the engine
+      surfaces it in step_begin) — read the item count from it NOW. Do NOT make a
+      substep re-read it: the dynamic child runs in its OWN runtime and does NOT
+      inherit the parent's data/ files, so embed the count value directly into the
+      substep goal text.
+
+      Draft 2-3 small substeps that:
+        1. record the chosen one-line processing strategy;
+        2. (LAST substep) write data/approach.json conforming to the `approach`
+           struct: {"strategy": "<one short sentence>", "item_count": <the count
+           you read from the manifest>, "notes": "<one short sentence>"}.
+
+      This demonstrates the planning mechanic AND that a dynamic child may use a
+      `struct:` that resolves to the parent's structs/ dir (the engine copies the
+      parent's structs/ into the child runtime). The child runtime is isolated,
+      but the engine promotes the planning step's LAST substep outputs up to the
+      parent run's data/ — so data/approach.json becomes available to the
+      downstream `aggregate` step via the normal data/ convention.
+    inputs:
+      - path: data/work-manifest.json
+        inject: file
+
+  # ── Step 3: process-items (subagent + PARALLEL, dynamic paths) ─────────────
+  # One branch per pending item. parallel_key resolves the file by the struct
+  # name `work-manifest` (declared by `seed`), reads .items, and keeps the items
+  # whose status == "pending". Each branch receives its item as branch data.
+  #
+  # OUTPUT PATH (read the DYNAMIC OUTPUT PATHS note in the header):
+  #   data/items/{run_id}-{parallel_key.name}-result.json
+  #     • {run_id} is a workflow param → the engine resolves it (same per branch).
+  #     • {parallel_key.name} is THIS branch's item name → the engine fills it,
+  #       giving each branch a distinct filename. The subagent writes exactly to
+  #       the concrete path shown in its outputs section (no substitution).
+  #     • no _branch_N is needed here (the name already isolates); never write a
+  #       literal _branch_* segment yourself.
+  - name: process-items
+    subagent: true
+    spec_check: false
+    parallel: true
+    parallel_key: "work-manifest.items[status=pending]"
+    goal: >
+      Process the single work item assigned to THIS branch (your branch data
+      holds its {"name", "status"}).
+
+      "Process" is simulated for the demo: compose a result and write it to the
+      CONCRETE output path shown in your outputs section — the engine has already
+      filled in your branch's name, so you substitute nothing; just write there.
+      Write exactly:
+        {"item": "<your item name>", "status": "done",
+         "detail": "<one short sentence describing what was simulated>"}
+
+      Write ONLY your branch's file. Do not touch other branches' files or any
+      shared file.
+    inputs:
+      - path: data/work-manifest.json
+        inject: reference
+    outputs:
+      - path: data/items/{run_id}-{parallel_key.name}-result.json
+        struct: item-result
+
+  # ── Step 4: aggregate (INLINE) ──────────────────────────────────────────────
+  # Inline (subagent: false): the orchestrator reads every per-branch result via
+  # a glob (inject: reference) and rolls them up. Also seeds the loop's progress
+  # registry from the {refine_passes} param so the loop below is self-contained.
+  - name: aggregate
+    subagent: false
+    spec_check: false
+    inputs:
+      - path: data/items/*-result.json
+        inject: reference
+      - path: data/approach.json
+        inject: reference
+    goal: >
+      Roll up the parallel results and seed the refinement loop.
+
+      1. Read every data/items/*-result.json file. Write data/aggregate.json
+         conforming to the `aggregate` struct: {"total": <count of result files>,
+         "done": <count with status "done">, "items": [<each item's name>, ...]}.
+      2. Seed the loop's progress registry — write data/refine-progress.json
+         conforming to the `refine-progress` struct, initial state:
+         {"passes_total": {refine_passes}, "passes_done": 0,
+          "passes_remaining": {refine_passes}}.
+    outputs:
+      - path: data/aggregate.json
+        struct: aggregate
+      - path: data/refine-progress.json
+        struct: refine-progress
+
+  # ── Step 5: refine (subagent) — LOOP RANGE START ───────────────────────────
+  # Demonstrates the OVERWRITE data-flow: refine-current.json is rewritten every
+  # pass (struct-less output — shows a valid output with no schema).
+  - name: refine
+    subagent: true
+    spec_check: false
+    inputs:
+      - path: data/aggregate.json
+        inject: reference
+      - path: data/refine-progress.json
+        inject: reference
+    goal: >
+      Run one refinement pass over the aggregate.
+
+      1. Read data/refine-progress.json — let N = passes_done (0-based index of
+         this pass).
+      2. OVERWRITE data/refine-current.json with:
+         {"pass": N, "note": "<one short sentence describing this refinement pass>"}
+
+      Progress bookkeeping belongs to the next step — do not modify
+      refine-progress.json here.
+    outputs:
+      - path: data/refine-current.json
+
+  # ── Step 6: record (subagent) — LOOP RANGE END, owns loop_back ─────────────
+  # Demonstrates per_iteration outputs (the engine injects {iteration} →
+  # data/refine-record_1.json, _2.json, ...), a param_binding out of the loop,
+  # and the loop_back block. The engine owns the loop decision (when.script).
+  - name: record
+    subagent: true
+    spec_check: false
+    inputs:
+      - path: data/refine-current.json
+        inject: file
+    goal: >
+      Record this pass and advance the loop's progress registry.
+
+      1. Read data/refine-current.json.
+      2. Write the per-iteration record (the engine shows you its exact resolved
+         path in the outputs section — it embeds the current iteration number):
+         {"pass": <pass from refine-current>, "iteration": <iteration from the
+         resolved output path>, "note": "<one short sentence>"}
+      3. Update data/refine-progress.json: passes_done += 1, passes_remaining -= 1
+         (passes_total unchanged). OVERWRITE the file.
+
+      After this step the ENGINE decides whether to loop back — obey the action
+      returned by step_complete (LOOP_BACK → begin the step it names).
+    outputs:
+      - path: data/refine-record.json
+        struct: refine-record
+        per_iteration: true
+      - path: data/refine-progress.json
+        struct: refine-progress
+    param_bindings:
+      passes_remaining: "data/refine-progress.json::passes_remaining"
+    loop_back:
+      to: refine
+      max_iterations: 5
+      when:
+        script: "python .riglane/workflows/templates/examples/full-mechanics-demo/scripts/check_progress.py"
+
+  # ── Step 7: decide (subagent) — owns ROUTES ────────────────────────────────
+  # Writes a triage file echoing the {mode} param, then the routes block fires:
+  # the engine runs the when.script decider, enters ONE route (or proceeds), and
+  # returns to the main `report` step afterwards.
+  - name: decide
+    subagent: true
+    spec_check: false
+    goal: >
+      Write data/triage.json EXACTLY as:
+        {"mode": "{mode}", "note": "<one sentence on how this run will finish>"}
+      The mode value comes straight from the run param — the route decider parses
+      this file mechanically, so copy it verbatim. You do NOT choose the path;
+      after this step the engine evaluates the routes block and tells you which
+      route to enter (obey the returned action).
+    outputs:
+      - path: data/triage.json
+    routes:
+      when:
+        script: "python .riglane/workflows/templates/examples/full-mechanics-demo/scripts/route_mode.py"
+      define:
+
+        # ── Route "deep": a multi-step alternative (subagent → inline) ──
+        - id: deep
+          steps:
+            - name: deep-analyze
+              subagent: true
+              spec_check: false
+              goal: >
+                Analyze the run more deeply. Write data/deep-analysis.json:
+                  {"findings": "<one short sentence>", "recommended_action": "<one short verb phrase>"}
+              outputs:
+                - path: data/deep-analysis.json
+            - name: deep-resolve
+              subagent: false
+              spec_check: false
+              inputs:
+                - path: data/deep-analysis.json
+                  inject: file
+              goal: >
+                Apply the recommended action (inline). Write data/resolution.json:
+                  {"path": "deep", "action": "<the recommended_action>", "resolved": true}
+              outputs:
+                - path: data/resolution.json
+
+        # ── Route "fail": INTENTIONAL gate failure → retry chain → STOP ──
+        # This step's output struct REQUIRES a "verdict" field, and the goal tells
+        # the worker to omit it on purpose. The structural gate fails every pass:
+        #   in-session bounce ×max_gate_retries → fresh-worker re-spawn
+        #   ×max_step_retries → STOP_WORKFLOW. Low budgets keep the chain short
+        #   and observable in the trace. This is the ONLY path that does not reach
+        #   `report` — by design.
+        - id: fail
+          steps:
+            - name: fail-demo
+              subagent: true
+              spec_check: false
+              goal: >
+                This step INTENTIONALLY demonstrates a gate failure — follow the
+                instruction literally even though it produces an invalid file.
+
+                Write data/fail-report.json with ONLY:
+                  {"attempted": true}
+                Deliberately OMIT the required "verdict" field. The structural
+                gate will reject it (missing required field), bounce you to retry,
+                and after the retry budget is exhausted the workflow STOPS. That
+                is the expected, demonstrated outcome — do not "helpfully" add the
+                verdict field.
+              outputs:
+                - path: data/fail-report.json
+                  struct: fail-report
+              gate:
+                structural: true
+                max_gate_retries: 2
+                max_step_retries: 1
+
+  # ── Step 8: report (INLINE) — final synthesis (proceed / deep paths) ────────
+  # Returns-to-main after any non-failing route. Reads whatever the run produced
+  # (some inputs optional via file_if_exists / globs).
+  - name: report
+    subagent: false
+    spec_check: false
+    carry_forward: true
+    inputs:
+      - path: data/aggregate.json
+        inject: reference
+      - path: data/triage.json
+        inject: reference
+      - path: data/refine-record_*.json
+        inject: reference
+      - path: data/resolution.json
+        inject: file_if_exists
+    goal: >
+      Write the final run report to data/report.md:
+
+      # full-mechanics-demo report
+
+      - items processed: <aggregate.done>/<aggregate.total>
+      - refinement passes recorded: <count of refine-record_*.json files>
+      - route taken: <triage.mode> (and, if data/resolution.json exists, its action)
+
+      One closing sentence on whether the run completed cleanly.
+    outputs:
+      - path: data/report.md

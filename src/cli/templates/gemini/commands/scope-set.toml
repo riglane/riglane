@@ -1,0 +1,23 @@
+description = "Set the active Riglane spec scope (user-level override, or project default with --project)"
+
+prompt = '''
+# Riglane scope-set
+
+Arguments: {{args}}
+
+Change the active scope used by spec-touching workflows and commands. Run via the shell tool:
+
+```
+riglane scope set <scope-id> [--project]
+```
+
+- Without `--project`: writes the user-level override `.riglane/local/active-scope` (gitignored).
+- With `--project`: sets `default_active_scope` in `.riglane/specs/_scope-config.json` (committed).
+
+The command validates the id (`^[a-z][a-z0-9-]*$`) and that it is `generic` or declared in
+`_scope-config.json`; on an unknown scope it suggests `/riglane:scope-add` or `/riglane:scope-list`.
+Relay the output. Do NOT edit `.riglane/local/active-scope` by hand, and NEVER change the scope
+while a workflow run is in progress (the engine owns scope threading during runs).
+
+Related: `/riglane:scope-show` · `/riglane:scope-unset` · `/riglane:scope-add` · `/riglane:scope-list`.
+'''

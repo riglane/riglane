@@ -1,0 +1,16 @@
+name: tool-proof
+version: 1
+description: >
+  Proof that the `generate_manifest` script tool was actually called by the
+  `confirm-tool` step. The token is a per-call, non-guessable value emitted only
+  by the tool, so a correct value can only come from a real tool round-trip.
+  (Pattern validation is a nudge, not airtight — the authoritative "was it
+  called" signal is the engine's tool-usage check: NO tool_warning on the step.)
+type: object
+required:
+  - token
+properties:
+  token:
+    type: string
+    pattern: "^[0-9a-f]{6,}$"
+    description: "The exact token returned by generate_manifest (hex)."

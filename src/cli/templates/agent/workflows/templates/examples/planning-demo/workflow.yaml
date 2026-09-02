@@ -1,0 +1,122 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# planning-demo — reference + self-test workflow for DYNAMIC PLANNING
+# (type: planning): the step whose substeps are decided PER INVOCATION.
+#
+# What it demonstrates (read top-to-bottom as a tutorial):
+#   1. type: planning           — the orchestrator itself (not a subagent)
+#                                receives an engine-generated PROCEDURE at
+#                                step_begin: consult agent_notes → draft a
+#                                small child workflow → workflow_validate_dynamic
+#                                → workflow_invoke_dynamic → drive the child's
+#                                substeps via the *_dynamic tools →
+#                                workflow_finalize_dynamic → evaluate → complete.
+#                                Follow that procedure EXACTLY — it is
+#                                regenerated fresh each time and is the truth.
+#   2. FLAT restriction fields  — max_substeps / max_plan_attempts /
+#                                allow_parallel / allow_delegation sit directly
+#                                on the step (NOT nested under a restrictions:
+#                                block). Exceeding max_plan_attempts →
+#                                BLOCKED_PLANNING_FAILURE: STOP and surface it,
+#                                never keep re-drafting.
+#   3. NO outputs on the step   — a planning step may not declare outputs:
+#                                (load-time error). The child's LAST substep's
+#                                outputs are PROMOTED into this run's data/
+#                                after finalize — which is how the consume step
+#                                below can read data/organized.json.
+#   4. agent_notes              — the procedure has you SEARCH notes before
+#                                drafting and WRITE an honest note after —
+#                                future planning runs of this step template
+#                                start from what past runs learned.
+#   5. WHEN planning fits        — decomposition varies per invocation (the
+#                                {request} param changes the right substeps).
+#                                For a KNOWN shape, author static steps instead
+#                                (planning costs draft+validate+drive overhead).
+#
+# Run:  /riglane-run-workflow planning-demo
+#       /riglane-run-workflow planning-demo --request "group by first letter, then count each group"
+# Full semantics: workflow_learn(topic="planning").
+# ─────────────────────────────────────────────────────────────────────────────
+name: planning-demo
+version: 1
+description: >
+  Reference and self-test workflow for dynamic planning. A planning step turns
+  a free-text organizing request into a small orchestrator-drafted child
+  workflow (bounded by flat restriction fields), whose final output is
+  promoted back into this run and consumed by an inline report step.
+
+params:
+  - name: request
+    description: >
+      Free-text instruction for HOW to organize the demo dataset — the
+      decomposition of the child workflow depends on it (that variability is
+      exactly why this is a planning step).
+    required: false
+    default: "split the words into short (<6 letters) and long, sort each group"
+
+gate:
+  structural: true
+  semantic: false
+  human: false
+  max_gate_retries: 2
+  max_step_retries: 1
+
+steps:
+  # ── Step 1: seed data (static — nothing to plan here) ──────────────────────
+  - name: seed
+    goal: >
+      Create the demo dataset. Write data/words.json EXACTLY as:
+        {"words": ["apple", "harvest", "orchard", "cider", "blossom", "grove",
+                   "basket", "press", "seed", "market"]}
+      The planning step's child workflow will organize this file per the
+      user's request — write it verbatim so runs are comparable.
+    subagent: true
+    spec_check: false
+    outputs:
+      - path: data/words.json
+        struct: words
+
+  # ── Step 2: the planning step ───────────────────────────────────────────────
+  # No outputs: (forbidden), no gate: (forbidden — substeps inherit the
+  # workflow gate). The child MUST end with a substep writing
+  # data/organized.json — promoted into THIS run after finalize.
+  - name: organize
+    type: planning
+    goal: >
+      Organize the dataset in data/words.json according to this request:
+      "{request}".
+
+      Draft the SMALLEST child workflow that genuinely fits the request —
+      one substep is fine for a simple request; use more only when the
+      request truly decomposes. The LAST substep MUST write
+      data/organized.json with fields: request (echo the request), groups
+      (an object mapping group-name → array of words), and note (one
+      sentence on the grouping) — the organized struct in this workflow's
+      structs/ dir describes it. Do not touch data/words.json.
+    max_substeps: 3
+    max_plan_attempts: 2
+    allow_parallel: false
+    allow_delegation: false
+
+  # ── Step 3: consume the PROMOTED child output (inline) ─────────────────────
+  - name: report
+    goal: >
+      Report the planning run. Read data/organized.json (promoted from the
+      child run's final substep) and data/words.json, then write data/report.md:
+
+      # planning-demo report
+
+      - request: {request}
+      - groups: one line per group — "<name>: <count> words"
+      - one sentence: did the child's organization actually satisfy the
+        request? (If data/organized.json is missing, say so explicitly —
+        that means the child's last substep did not produce its contract.)
+    subagent: false
+    spec_check: false
+    carry_forward: true
+    inputs:
+      - path: data/organized.json
+        inject: file_if_exists
+      - path: data/words.json
+        inject: reference
+    outputs:
+      - path: data/report.md

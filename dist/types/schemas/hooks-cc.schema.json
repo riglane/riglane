@@ -1,0 +1,39 @@
+{
+    "$schema": "https://json-schema.org/draft-07/schema#",
+    "$id": "riglane-hooks-cc-v1",
+    "title": "Riglane Hook — Claude Code SubagentStop Input",
+    "description": "Schema for the JSON payload Claude Code sends to gate-check via stdin on the SubagentStop event. Note: CC's payload shape is owned by Claude Code itself; this schema documents the subset the engine consumes. Unknown fields MUST be tolerated.",
+    "type": "object",
+    "additionalProperties": true,
+    "description-discriminators": "Presence of any of agent_id, agent_transcript_path, or agent_type identifies the input as Claude Code (per the riglane gate-check host detection).",
+    "properties": {
+        "agent_id": {
+            "type": "string",
+            "description": "Claude Code subagent identifier. Presence of this field implies CC host."
+        },
+        "agent_transcript_path": {
+            "type": "string",
+            "description": "Path to the subagent's full transcript file. Presence implies CC host."
+        },
+        "agent_type": {
+            "type": "string",
+            "description": "Agent type identifier. Presence implies CC host."
+        },
+        "hook_event_name": {
+            "type": "string",
+            "description": "Event name. CC may send 'SubagentStop'. Cursor 2.6.19+ also sends this field, so it is NOT a reliable host discriminator."
+        },
+        "task": {
+            "type": ["string", "null"],
+            "description": "Task prompt sent to the subagent. May be null in CC (transcript-based; not always populated)."
+        },
+        "model": {
+            "type": ["string", "null"],
+            "description": "Model identifier. CC may include this; otherwise extractable from transcript."
+        },
+        "status": {
+            "type": ["string", "null"],
+            "description": "Subagent termination status. CC subagent stop fires once on completion; status field MAY be omitted."
+        }
+    }
+}

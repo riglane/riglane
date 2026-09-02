@@ -1,0 +1,16 @@
+name: classification
+description: >
+  The triage classification produced by the `classify` step and read by the
+  route deciders (scripts/route_severity.py, scripts/route_escalation.py).
+  `severity` selects the top-level route (minor | major | critical) and
+  `escalation` selects the nested sub-route under critical (hotfix | rollback).
+format: json
+
+json_schema:
+  required_fields:
+    - field: severity
+      type: string
+    - field: escalation
+      type: string
+    - field: summary
+      type: string

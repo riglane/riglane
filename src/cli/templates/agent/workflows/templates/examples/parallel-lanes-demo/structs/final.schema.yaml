@@ -1,0 +1,22 @@
+name: final
+description: The synthesize step's combined report — the "join logic" output.
+version: 1
+type: object
+required:
+  - topics_processed
+  - research_iterations
+  - review_verdict
+  - join_require
+  - lanes_completed
+properties:
+  topics_processed:
+    type: integer
+  research_iterations:
+    type: integer
+  review_verdict:
+    type: string
+  join_require:
+    type: string
+    enum: [all, any]
+  lanes_completed:
+    type: integer

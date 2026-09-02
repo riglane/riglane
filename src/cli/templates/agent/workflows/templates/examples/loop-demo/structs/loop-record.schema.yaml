@@ -1,0 +1,18 @@
+name: loop-record
+description: >
+  Per-iteration record written by record-result. The output declares
+  per_iteration: true, so the engine resolves the path to
+  data/record_{iteration}.json — one immutable file per loop pass.
+  The summarize step reads the full history via the data/record_*.json glob.
+format: json
+
+json_schema:
+  required_fields:
+    - field: scenario_id
+      type: number
+    - field: title
+      type: string
+    - field: status
+      type: string
+    - field: iteration
+      type: number

@@ -1,0 +1,244 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "$id": "riglane-manifest-v1",
+  "title": "Riglane Workflow Manifest",
+  "description": "Schema for manifest.json files. The manifest is the workflow's runtime state — created at workflow_init, updated as steps progress, finalized at workflow end.",
+
+  "type": "object",
+  "required": [
+    "workflow",
+    "workflow_version",
+    "run_id",
+    "run_token",
+    "params",
+    "status",
+    "started_at",
+    "updated_at",
+    "steps"
+  ],
+  "additionalProperties": false,
+
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional reference to this JSON Schema for editor tooling."
+    },
+    "workflow": {
+      "type": "string",
+      "description": "Workflow name (matches workflow.yaml `name`)."
+    },
+    "workflow_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Workflow version copied from workflow.yaml at workflow_init."
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]*-[0-9]{8}-[0-9]{6}-[0-9a-f]{4}$",
+      "description": "Unique run identifier. Format: <workflow-name>-<YYYYMMDD-HHmmss>-<4hex>. Same value as the trace's run_id."
+    },
+    "run_token": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "UUID4 for run verification. Regenerated at every workflow_init. The orchestrator injects this into subagent prompts as <!--workflow:run_token:UUID-->. the riglane gate-check hook uses it to detect stale gate results from prior runs/sessions."
+    },
+    "params": {
+      "type": "object",
+      "description": "Resolved workflow parameters. Includes user-supplied values, defaults, the engine-injected synthetic 'run_id' param, and any param_bindings updates applied during execution."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["in_progress", "completed", "failed", "paused"],
+      "description": "Overall workflow status."
+    },
+    "current_step": {
+      "type": ["string", "null"],
+      "description": "Name of the step currently executing or last executed. NULL only when there are no steps."
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp with timezone offset. When this run started."
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp. MUST be updated on every state change. Used by find_workflow_dir to detect the active workflow."
+    },
+    "steps": {
+      "type": "object",
+      "description": "Per-step state. Keys are step names (matching workflow.yaml). All workflow steps MUST have an entry, initialized at workflow_init with status='pending'.",
+      "additionalProperties": { "$ref": "#/definitions/stepState" }
+    },
+    "completed_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "Set by workflow_finalize when the run terminates."
+    },
+    "model_override": {
+      "type": "string",
+      "enum": ["inherit", "auto", "lightest", "strongest"],
+      "description": "Run-level model override (--model at launch / riglane ui / a launcher app, the model_override arg to workflow_init, or RIGLANE_MODEL_OVERRIDE env). Overrides each step's per-step model MODE for all subagent steps of this run. Validated at workflow_init."
+    },
+    "step_tools": {
+      "type": "object",
+      "description": "Frozen per-step tool declarations (step-tool-rights): computed once at workflow_init (backfilled at workflow_resume) for the whole step tree, route and inline steps included. The call-time declaration guard reads THIS copy, never the live workflow.yaml — a mid-run tools: edit cannot change a running run's rights. A step declaring nothing carries []; absence of the whole field means the manifest predates the freeze (guard applies upgrade grace).",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["kind", "name"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "type": "string", "enum": ["script", "mcp", "spec"] },
+            "name": {
+              "type": "string",
+              "description": "script: combined MCP core name <wfNorm>__<toolNorm>; mcp: raw expected tool name; spec: engine tool name."
+            },
+            "server": { "type": "string", "description": "mcp only: the declared server name (raw)." }
+          }
+        }
+      }
+    },
+    "parallel_branches": {
+      "type": "object",
+      "description": "Set by step_begin for parallel steps; deleted by step_complete after merge. Keys are branch indices as strings.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["branch_dir", "status"],
+        "additionalProperties": false,
+        "properties": {
+          "branch_dir": { "type": "string" },
+          "status": { "type": "string", "enum": ["pending", "in_progress", "completed", "failed"] },
+          "resolved_outputs": {
+            "type": "array",
+            "description": "Persist-once (parallel-output-paths): per-branch output paths resolved once at step_begin so merge + gate read them verbatim (write/validate agree by construction). One entry per declared output. Absent on legacy runs.",
+            "items": {
+              "type": "object",
+              "required": ["declared", "working", "semantic", "scaffolded"],
+              "additionalProperties": false,
+              "properties": {
+                "declared": { "type": "string" },
+                "working": { "type": "string" },
+                "semantic": { "type": "string" },
+                "scaffolded": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+
+  "definitions": {
+    "stepState": {
+      "type": "object",
+      "required": ["status"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["pending", "in_progress", "completed", "failed", "skipped"]
+        },
+        "started_at": { "type": ["string", "null"], "format": "date-time" },
+        "first_started_at": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "Initial step start. Immutable across retries (set only if absent on subsequent step_begin calls)."
+        },
+        "completed_at": { "type": ["string", "null"], "format": "date-time" },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Step duration in milliseconds. Computed by step_complete as (completed_at - started_at) * 1000."
+        },
+        "prompt_files": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Per-branch prompt file paths for parallel steps."
+        },
+        "tool_warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "description": "Diagnostic warnings about declared-but-uncalled tools. Emitted by step_complete when a step's tools whitelist was not fully exercised."
+        },
+        "gate_results": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Results from each gate layer. Layers report independently. A layer that did not run MAY be omitted.",
+          "properties": {
+            "structural": { "$ref": "#/definitions/structuralGateResult" },
+            "semantic": { "$ref": "#/definitions/semanticGateResult" },
+            "human": { "$ref": "#/definitions/humanGateResult" }
+          }
+        },
+        "summary": {
+          "type": ["string", "null"],
+          "description": "Brief description of what this step did. Used by context.carry_forward='summary'."
+        },
+        "parallel_tasks": {
+          "type": "array",
+          "description": "Per-branch state for steps with parallel: true.",
+          "items": { "$ref": "#/definitions/parallelTaskState" }
+        }
+      }
+    },
+
+    "structuralGateResult": {
+      "type": "object",
+      "required": ["passed", "checks", "failures", "details"],
+      "additionalProperties": false,
+      "properties": {
+        "passed": { "type": "boolean" },
+        "checks": { "type": "integer", "minimum": 0 },
+        "failures": { "type": "integer", "minimum": 0 },
+        "details": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "semanticGateResult": {
+      "type": "object",
+      "required": ["passed"],
+      "additionalProperties": false,
+      "properties": {
+        "passed": { "type": "boolean" },
+        "notes": { "type": "string" }
+      }
+    },
+
+    "humanGateResult": {
+      "type": "object",
+      "required": ["passed"],
+      "additionalProperties": false,
+      "properties": {
+        "passed": { "type": "boolean" },
+        "approved_by": {
+          "type": "string",
+          "description": "Identifier of who approved (typically 'user')."
+        }
+      }
+    },
+
+    "parallelTaskState": {
+      "type": "object",
+      "required": ["key", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "Branch identifier from parallel_key resolution."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "in_progress", "completed", "failed"]
+        },
+        "started_at": { "type": ["string", "null"], "format": "date-time" },
+        "completed_at": { "type": ["string", "null"], "format": "date-time" },
+        "summary": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

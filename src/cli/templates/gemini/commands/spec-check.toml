@@ -1,0 +1,34 @@
+description = "Respect the project's behavioral specs when changing code, config, or data — consult relevant specs first, honor them, verify after, and register file-to-spec links via spec_link."
+
+prompt = '''
+# Riglane spec-check
+
+Arguments (optional context): {{args}}
+
+Honor the project's behavioral specs whenever you change the project (code / config / data).
+On this host the spec tools surface as `mcp_workflow_engine_spec_search` /
+`mcp_workflow_engine_spec_link`.
+
+## Before you change
+1. **Scope** = active + generic (universal invariants always apply).
+2. **Find relevant specs by the AREA you are touching** — call `spec_search` (domain /
+   applies_to / keywords). `applies_to` and `_registry.json` are fast hints, NOT the only
+   channel — judge by what your change actually affects.
+3. Read each relevant spec; plan the change to honor its **Rule Statement**.
+
+## After you change
+4. Re-verify the modified artifacts still honor each relevant spec.
+5. **Conflict?** If honoring a spec is impossible → STOP and report the conflict. A spec
+   conflict is a decision above your level; never silently override a spec.
+
+## Register the link
+6. When your change makes a file relate to a spec: `spec_link(op: "add", spec_id, file, role)`
+   with role ∈ `implements` (produces the behavior → verify ALL requirements) · `configures`
+   (sets the constrained values → verify them) · `verifies` (tests it → verify coverage) ·
+   `uses` (consumes the contract → don't break it) · `affects` (indirect dependency → re-verify
+   proactively on change).
+7. Remove a link only if YOUR change is the cause: `spec_link(op: "remove", ..., reason)`. A
+   suspected pre-existing wrong mapping → flag it, do NOT remove it.
+
+Do NOT hand-write `_registry.json` — `spec_link` owns it; manual edits are blocked.
+'''

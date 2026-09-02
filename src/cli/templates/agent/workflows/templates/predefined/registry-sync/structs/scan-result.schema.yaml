@@ -1,0 +1,81 @@
+name: scan-result
+description: >
+  Output of a single SCAN subagent — the per-domain implementation-discovery
+  pass. For each spec in the domain: the source files that implement it
+  (matched to a spec role), diffed against the current registry into
+  new_matches (untracked) + stale_entries (registered but gone/misattributed).
+  Plus scope_findings — specs whose implementing code sits predominantly in
+  ANOTHER scope's area (advisory; judged against scope coverage hints). One
+  file per domain, produced in parallel. READ-ONLY: never writes the registry.
+format: json
+
+json_schema:
+  required_fields:
+    - field: workflow
+      type: string
+    - field: domain
+      type: string
+    - field: source_scope
+      type: string
+    - field: scanned_at
+      type: string
+    - field: specs_scanned
+      type: number
+    - field: results
+      type: array
+    - field: results[].spec_id
+      type: string
+    - field: results[].new_matches
+      type: array
+      description: >
+        Files that implement the spec but are NOT in the registry (or are there
+        with a different role). Empty when the mapping is already complete.
+    - field: results[].new_matches[].file
+      type: string
+    - field: results[].new_matches[].role
+      type: string
+      enum: [implements, configures, verifies, uses, affects]
+      description: >
+        Spec role vocabulary (matches spec_link): implements=produces the
+        behavior; configures=sets constrained values; verifies=tests it;
+        uses=consumes the contract; affects=indirect dependency.
+    - field: results[].new_matches[].confidence
+      type: string
+      enum: [high, medium, low]
+    - field: results[].new_matches[].reason
+      type: string
+      description: Why this file was matched (the traced relationship, not a bare name hit).
+    - field: results[].stale_entries
+      type: array
+      description: >
+        Registered files that no longer exist, or that no longer relate to the
+        spec. Each names the file + why it is stale. Removal is spec_link
+        op:remove (reason required) — proposed here, applied only after approval.
+    - field: results[].stale_entries[].file
+      type: string
+    - field: results[].stale_entries[].reason
+      type: string
+    - field: scope_findings
+      type: array
+      description: >
+        ADVISORY: specs in THIS domain whose implementing code lives
+        predominantly in another scope's area (judged against the scope
+        coverage hints from the discovery plan). Empty when none. NOT acted on
+        by this workflow — surfaced at the REVIEW human gate. Moving a spec
+        across scopes is a separate, human-driven decision.
+    - field: scope_findings[].spec_id
+      type: string
+    - field: scope_findings[].current_scope
+      type: string
+    - field: scope_findings[].suggested_scope
+      type: string
+      description: >
+        The scope whose coverage the implementing code fits (an existing scope
+        id, or "generic" for cross-integration behavior).
+    - field: scope_findings[].rationale
+      type: string
+      description: Evidence — where the code lives + which coverage hint it matches.
+
+file_checks:
+  exists: true
+  min_size: 80

@@ -1,0 +1,18 @@
+# Blank issues are disabled deliberately: the two templates ask for the four
+# things (versions, harness, workflow, trace) whose absence makes the first
+# reply a request for them. The contact links route everything that is not a
+# defect somewhere it will be answered faster.
+blank_issues_enabled: false
+contact_links:
+  - name: Question — how does something work?
+    url: https://github.com/riglane/riglane/discussions/categories/q-a
+    about: Discussions → Q&A. Answers stay searchable, which an issue thread does not.
+  - name: Documentation — wrong, missing or misleading
+    url: https://github.com/riglane/riglane/issues
+    about: The manual is part of the product. Docs fixes merge fastest.
+  - name: Share a workflow, or report a problem with a catalog entry
+    url: https://github.com/riglane/riglane-catalog
+    about: Entries live in the catalog repository. A malicious entry is a security report — see below.
+  - name: Security issue
+    url: https://github.com/riglane/riglane/security/advisories/new
+    about: Private vulnerability reporting. Never a public issue — read SECURITY.md first.

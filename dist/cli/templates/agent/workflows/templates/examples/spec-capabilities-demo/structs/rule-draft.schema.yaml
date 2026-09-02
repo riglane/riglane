@@ -1,0 +1,19 @@
+name: rule-draft
+description: spec-capabilities-demo drafted rule (input to spec_write)
+version: 1
+type: object
+required:
+  - domain
+  - title
+  - rule_statement
+  - applies_to
+properties:
+  domain:
+    type: string
+  title:
+    type: string
+  rule_statement:
+    type: string
+  applies_to:
+    type: array
+    min_items: 1

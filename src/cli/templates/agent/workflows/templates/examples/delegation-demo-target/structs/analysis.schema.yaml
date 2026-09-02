@@ -1,0 +1,18 @@
+name: analysis
+description: Verdict record produced by delegation-demo-target's analyze step.
+version: 1
+type: object
+required:
+  - component
+  - verdict
+properties:
+  component:
+    type: string
+    description: The analyzed component (echoed from the input param).
+  verdict:
+    type: string
+    enum: [pass, fail]
+    description: Analysis verdict — the value the delegating parent extracts.
+  note:
+    type: string
+    description: One short sentence describing what was simulated.

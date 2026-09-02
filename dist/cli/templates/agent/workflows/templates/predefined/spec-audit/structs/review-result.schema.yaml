@@ -1,0 +1,65 @@
+name: review-result
+description: >
+  Output of a single REVIEW subagent — the per-domain compliance pass. For each
+  spec: its Rule Statement checked against the implementing code by executing the
+  spec's Validation Criteria. One file per domain, produced in parallel. Findings
+  are PROVISIONAL — VERIFY deep-reads the implementation and finalizes them.
+format: json
+
+json_schema:
+  required_fields:
+    - field: workflow
+      type: string
+    - field: domain
+      type: string
+    - field: reviewed_at
+      type: string
+    - field: specs_checked
+      type: number
+    - field: counts
+      type: object
+    - field: counts.compliant
+      type: number
+    - field: counts.violation
+      type: number
+    - field: counts.partial
+      type: number
+    - field: counts.unverifiable
+      type: number
+    - field: results
+      type: array
+    - field: results[].spec_id
+      type: string
+    - field: results[].title
+      type: string
+    - field: results[].status
+      type: string
+      enum: [compliant, violation, partial, unverifiable]
+      description: >
+        Compliance of the implementation with this spec's Rule Statement.
+        "violation"/"partial" add entries to divergences[] below.
+    - field: divergences
+      type: array
+      description: >
+        Provisional findings (one per violation/partial; a spec may yield
+        several). VERIFY confirms and deepens them.
+    - field: divergences[].spec_id
+      type: string
+    - field: divergences[].divergence_severity
+      type: string
+      enum: [not_implemented, partial, edge_case]
+      description: >
+        DEGREE of divergence (not_implemented = behavior absent; partial = real
+        incomplete gap; edge_case = narrow missed case). NOT a spec-obligation
+        severity — every spec is mandatory. Provisional; VERIFY finalizes.
+    - field: divergences[].what
+      type: string
+    - field: divergences[].file
+      type: string
+      description: >
+        WHERE — the audited source file (provisional; VERIFY finalizes). An
+        optional `line` (number) accompanies it when tied to a specific line.
+
+file_checks:
+  exists: true
+  min_size: 100

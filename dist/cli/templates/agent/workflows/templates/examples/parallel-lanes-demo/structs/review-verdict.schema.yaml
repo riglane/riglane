@@ -1,0 +1,13 @@
+name: review-verdict
+description: The review lane's verdict — read mechanically by the in-lane route decider.
+version: 1
+type: object
+required:
+  - verdict
+  - note
+properties:
+  verdict:
+    type: string
+    enum: [deep, quick]
+  note:
+    type: string

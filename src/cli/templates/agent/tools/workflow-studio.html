@@ -1,0 +1,2660 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Workflow Studio | Riglane</title>
+<style>
+  /* ─────────────────────────────────────────────────────────────────────
+     Workflow Studio — unified Workflow Editor + Trace Viewer.
+     Vanilla single-file Riglane tool. The two existing tools run verbatim inside
+     same-origin iframes (zero functional loss); this shell provides the
+     centered section switch, the workflow/run sidebar, and the Details panel,
+     and re-themes the embedded tools to the warm cream palette (ported from
+     the Projects Spec & Audit tool). Light-only (dark dropped — D4).
+     ───────────────────────────────────────────────────────────────────── */
+  :root {
+    --canvas: #F5F4F0; --topbar: #FCFAF4; --sidebar: #FBF7EE; --panel: #FFFFFF;
+    --field: #FAF7EF; --border: #EAE3D5; --border-soft: #F0EADD;
+    --text: #2A2722; --text-secondary: #6B655B; --muted: #8C8578; --muted2: #9A9384;
+    --faint: #B0A892; --faint2: #C0B89F; --dark: #2D2A24; --on-dark: #F6F2E9;
+    --violet: #5E54A8; --violet-bg: #EDEAF8;
+    --ok: #6F9448; --ok-bg: #EEF3E2; --bad: #A23B29; --bad-bg: #FBEAE7;
+    --warn: #B08234; --warn-bg: #F8EFDC; --info: #5B8DB8; --info-bg: #E7EFF6;
+    --purple: #8B7EC8; --purple-bg: #EEEBF7; --amber: #D9A05B;
+    /* Aliases so the embedded tools' inlined SVG diagram markers/labels
+       (which reference these var names) resolve when rendered in the panel. */
+    --text-muted: #9A9384; --green: #6F9448; --green-bg: #EEF3E2;
+    --red: #A23B29; --red-bg: #FBEAE7; --blue: #5B8DB8; --accent: #5E54A8;
+    --font: 'Hanken Grotesk', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    --mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+    --topbar-h: 52px; --sidebar-w: 274px; --sidebar-rail: 56px;
+  }
+  * { box-sizing: border-box; }
+  /* Scrollbars are chrome, not content: thin, quiet, and only as visible as
+     they need to be to say the area scrolls. */
+  * { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 8px;
+    border: 2px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); background-clip: content-box; }
+  ::-webkit-scrollbar-corner { background: transparent; }
+  html, body { margin: 0; height: 100%; }
+  body { font-family: var(--font); -webkit-font-smoothing: antialiased; color: var(--text); background: var(--canvas); }
+  ::selection { background: #e3dac6; }
+  #app { height: 100%; display: flex; flex-direction: column; background: var(--border-soft); }
+
+  /* ── Top bar ── */
+  #topbar { height: var(--topbar-h); flex: 0 0 auto; display: flex; align-items: center; gap: 12px; padding: 0 14px; background: var(--topbar); border-bottom: 1px solid var(--border); }
+  .tb-left, .tb-right { display: flex; align-items: center; gap: 8px; }
+  /* 3-column flex: equal side columns keep the switch centered IN FLOW (no
+     absolute overlap of the elements beneath it — user feedback #1). */
+  .tb-left { flex: 1 1 0; min-width: 0; gap: 10px; }
+  .tb-right { flex: 1 1 0; min-width: 0; justify-content: flex-end; }
+  .tb-brand { font-size: 14.5px; font-weight: 700; color: var(--text); white-space: nowrap; }
+  .tb-sep { width: 1px; height: 22px; background: var(--border); flex: 0 0 auto; }
+  .tb-context { font-size: 12.5px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .tb-context b { font-weight: 600; color: var(--text); }
+  .tb-context .dot { margin: 0 7px; color: var(--faint); }
+  /* Centered section switch — in normal flow between the two equal columns. */
+  #switch { flex: 0 0 auto; display: flex; background: var(--field); border: 1px solid var(--border); border-radius: 10px; padding: 3px; gap: 3px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+  .tb-act { padding: 5px 12px; font-size: 12px; border: 1px solid var(--border); }
+  .switch-btn { display: flex; align-items: center; gap: 7px; border: none; background: transparent; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 600; color: var(--muted); padding: 6px 16px; border-radius: 8px; transition: background 0.14s ease, color 0.14s ease; }
+  .switch-btn:hover { color: var(--text); }
+  .switch-btn.active { background: var(--dark); color: var(--on-dark); box-shadow: 0 1px 3px rgba(0,0,0,0.14); }
+  .switch-btn.active:hover { color: var(--on-dark); }
+  .live-dot { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
+  .live-dot .d { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: var(--faint); }
+  .live-dot.on .d { background: var(--ok); animation: saPulse 2s ease-in-out infinite; }
+  @keyframes saPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+  /* ── Body layout ── */
+  /* 3px gap below the topbar (shows the #app backdrop) so the switch/topbar
+     doesn't touch the content beneath it (user feedback #1). */
+  #bodyrow { flex: 1; min-height: 0; display: flex; margin-top: 3px; }
+
+  /* ── Sidebar ── */
+  #sidebar { width: var(--sidebar-w); flex: 0 0 auto; background: var(--sidebar); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+  #sidebar.collapsed { width: var(--sidebar-rail); align-items: center; padding: 10px 0; gap: 6px; }
+  .sb-head { display: flex; align-items: center; gap: 8px; padding: 12px 10px 10px 14px; }
+  .sb-title { flex: 1 1 auto; min-width: 0; font-size: 14px; font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sb-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 2px 8px 10px; }
+  .sb-foot { flex: 0 0 auto; padding: 8px 8px 10px; border-top: 1px solid var(--border-soft); }
+  .sa-sechead { padding: 0 8px; height: 26px; display: flex; align-items: center; color: var(--muted2); font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+  .ft-row { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 34px; padding: 0 10px; border: none; border-radius: 8px; cursor: pointer; text-align: left; background: transparent; color: var(--text-secondary); font-weight: 500; font-family: inherit; }
+  .ft-row:hover { background: #f1ebdc; }
+  .ft-row-active { background: #efe7d5; color: var(--text); font-weight: 600; }
+  .ft-row-active:hover { background: #efe7d5; }
+  .ft-row .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ft-row .sub { font-size: 10.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row-2 { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
+  .ft-rail { width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border: none; border-radius: 9px; cursor: pointer; background: transparent; color: var(--text-secondary); }
+  .ft-rail:hover { background: #f1ebdc; }
+  .ft-rail-active { background: #efe7d5; }
+  .ft-quiet-soft { border: none; background: transparent; cursor: pointer; color: var(--muted2); display: flex; align-items: center; justify-content: center; }
+  .ft-quiet-soft:hover { background: #f4efe3; color: var(--text); }
+  .sa-dashed { border: 1px dashed var(--faint2); background: transparent; cursor: pointer; color: var(--text-secondary); font-family: inherit; display: flex; align-items: center; justify-content: center; }
+  .sa-dashed:hover { background: #f1ebdc; border-color: #c9be9f; color: var(--text); }
+  .folder-caret { transition: transform 0.15s ease; flex: 0 0 auto; color: var(--faint); display: inline-flex; width: 12px; }
+  .folder-open .folder-caret { transform: rotate(90deg); }
+  .status-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+  .cat-badge { font-size: 9.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; padding: 1px 5px; border-radius: 5px; flex: 0 0 auto; }
+  /* Workflow row wrapper (editor): clickable label + 3-dots context menu. */
+  .ws-rowwrap { position: relative; display: flex; align-items: center; border-radius: 8px; }
+  .ws-rowwrap:hover { background: #f1ebdc; }
+  .ws-rowwrap.ft-row-active { background: #efe7d5; }
+  .ws-rowwrap .ft-row { background: transparent !important; }
+  .ws-dots { flex: 0 0 auto; width: 26px; height: 30px; border: none; background: transparent; cursor: pointer; color: var(--muted2); border-radius: 6px; font-size: 15px; line-height: 1; }
+  .ws-dots:hover { background: #e7dfcd; color: var(--text); }
+  .ws-menu { position: absolute; right: 6px; top: 32px; z-index: 40; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,0.14); padding: 4px; min-width: 130px; }
+  .ws-menu button { display: block; width: 100%; text-align: left; border: none; background: transparent; cursor: pointer; font-family: inherit; font-size: 12.5px; color: var(--text); padding: 6px 10px; border-radius: 6px; }
+  .ws-menu button:hover { background: #f1ebdc; }
+
+  /* ── Main / iframes ── */
+  #main { flex: 1; min-width: 0; position: relative; background: var(--canvas); }
+  .studio-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: none; background: var(--canvas); }
+  .studio-frame.hidden { display: none; }
+  .placeholder { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 0 24px; }
+  .placeholder .inner { max-width: 460px; text-align: center; color: var(--muted); }
+  .placeholder .t { font-size: 14.5px; font-weight: 700; color: var(--text-secondary); margin-bottom: 6px; }
+  .placeholder .b { font-size: 12.5px; line-height: 1.6; }
+  .mono { font-family: var(--mono); font-size: 0.92em; background: var(--field); border: 1px solid var(--border-soft); border-radius: 5px; padding: 0 4px; }
+
+  /* ── Agent Messages (the run inbox) ── */
+  .msg-badge { margin-left: 6px; min-width: 17px; height: 17px; padding: 0 5px; border-radius: 9px; background: var(--bad); color: #fff; font-size: 10.5px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+  #messagesPane { position: absolute; inset: 0; overflow-y: auto; padding: 18px 22px 40px; }
+  #messagesPane.hidden { display: none; }
+  .msg-wrap { max-width: 760px; margin: 0 auto; display: grid; gap: 12px; }
+  .msg-grouphead { font-size: 12px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted2); margin: 10px 0 -4px; }
+  .msg-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+  .msg-card.pending { border-color: var(--amber); box-shadow: 0 0 0 1px var(--warn-bg); }
+  /* Retired: readable but plainly not actionable — no amber, no controls. */
+  .msg-card.superseded { opacity: .62; }
+  .msg-card.superseded .msg-title { text-decoration: line-through; }
+  .msg-kind { display: inline-flex; align-items: center; font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; border-radius: 6px; padding: 2px 7px; background: var(--violet-bg); color: var(--violet); }
+  .msg-kind.info { background: var(--info-bg); color: var(--info); }
+  .msg-title { font-size: 14.5px; font-weight: 700; color: var(--text); margin: 7px 0 2px; }
+  .msg-meta { font-size: 11.5px; color: var(--muted); }
+  .msg-body { margin-top: 8px; font-size: 13px; line-height: 1.6; color: var(--text-secondary); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg-req { margin-top: 8px; font-family: var(--mono); font-size: 12px; background: var(--field); border: 1px solid var(--border-soft); border-radius: 8px; padding: 8px 10px; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+  /* Engine-read output excerpts — the consent evidence beside the prose. */
+  .msg-vc { margin-top: 8px; border: 1px solid var(--border-soft); border-radius: 8px; padding: 8px 10px; background: var(--field); }
+  .msg-vc-cap { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+  .msg-vc-file { font-size: 12px; margin-top: 4px; }
+  .msg-vc-pre { margin: 4px 0 0; font-family: var(--mono); font-size: 11.5px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow-y: auto; color: var(--text); }
+  .msg-answer { margin-top: 10px; border-top: 1px dashed var(--border); padding-top: 10px; }
+  .msg-answer .who { font-size: 11.5px; color: var(--muted); margin-bottom: 3px; }
+  .msg-actions { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .msg-btn { height: 30px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel); font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+  .msg-btn.accept { background: var(--ok-bg); border-color: var(--ok); color: var(--ok); }
+  .msg-btn.reject { background: var(--bad-bg); border-color: var(--bad); color: var(--bad); }
+  .msg-btn.send { background: var(--violet-bg); border-color: var(--violet); color: var(--violet); }
+  .msg-btn:disabled { opacity: 0.5; cursor: default; }
+  /* Predefined alternatives (request.choices): a vertical pick-one list in
+     the amber accent — visually distinct from yes/no (green/red) and from
+     free text / Send (violet). */
+  .msg-choicecap { margin-top: 10px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--amber); }
+  .msg-choicelist { display: flex; flex-direction: column; align-items: stretch; gap: 6px; margin-top: 6px; max-width: 480px; }
+  .msg-choice { display: flex; align-items: center; gap: 10px; text-align: left; padding: 8px 12px; border-radius: 9px; border: 1px solid var(--amber); background: var(--panel); font: inherit; font-size: 12.5px; color: var(--text); cursor: pointer; transition: background .12s ease; }
+  .msg-choice::before { content: ''; width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--amber); background: transparent; flex: 0 0 auto; }
+  .msg-choice:hover { background: var(--warn-bg); }
+  .msg-choice.sel { background: var(--warn-bg); font-weight: 700; box-shadow: inset 0 0 0 1px var(--amber); }
+  .msg-choice.sel::before { background: var(--amber); box-shadow: inset 0 0 0 2.5px var(--panel); }
+  /* The agent's suggestion (request.recommended): a badge, never a preselect —
+     the same tag the terminal entry carries, so every channel shows it. */
+  .msg-choice .rec { margin-left: auto; flex: 0 0 auto; font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--amber); border: 1px solid var(--amber); border-radius: 999px; padding: 1px 8px; }
+  .msg-text { width: 100%; min-height: 54px; margin-top: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font: inherit; font-size: 12.5px; resize: vertical; background: var(--panel); color: var(--text); }
+  .msg-item { margin-top: 10px; padding: 9px 12px; border: 1px solid var(--border); border-left: 3px solid var(--violet); border-radius: 8px; background: var(--field); }
+  .msg-item-t { font-size: 13px; font-weight: 700; color: var(--text); }
+  .msg-item-ans { margin-top: 5px; font-size: 12.5px; color: var(--text-secondary); }
+  .msg-btn.sel { outline: 2px solid currentColor; outline-offset: 1px; }
+  /* Stale-page banner: the served tools changed under a long-open studio. */
+  .stale-banner { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 9999; display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--amber); background: var(--warn-bg); color: var(--text); font-size: 12.5px; box-shadow: 0 6px 24px rgba(0,0,0,0.25); }
+  .stale-banner button { height: 26px; padding: 0 12px; border-radius: 7px; border: 1px solid var(--amber); background: var(--amber); color: #fff; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+  /* A marked verdict must be unmistakable (live: a selected Accept read as
+     unselected) — the selected button flips to a solid fill. */
+  .msg-btn.accept.sel { background: var(--ok); border-color: var(--ok); color: #fff; outline: none; }
+  .msg-btn.reject.sel { background: var(--bad); border-color: var(--bad); color: #fff; outline: none; }
+
+  /* ── Details panel — in-flow, resizable (shrinks the canvas area; the
+     embedded tool re-centers its content in the remaining space so it stays
+     readable). */
+  .ft-resize { width: 6px; margin: 0 -3px; cursor: col-resize; flex: 0 0 auto; z-index: 10; background: transparent; transition: background 0.12s ease; }
+  .ft-resize:hover, .ft-resize:active { background: rgba(94, 84, 168, 0.28); }
+  #panel { flex: 0 0 auto; background: var(--panel); border-left: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+  #panel.collapsed { width: 44px !important; }
+  .pnl-head { position: relative; display: flex; align-items: center; gap: 8px; padding: 11px 10px 11px 14px; border-bottom: 1px solid var(--border-soft); flex: 0 0 auto; }
+  .pnl-title { flex: 1; font-size: 13px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted2); }
+  .pnl-body { flex: 1; min-height: 0; overflow-y: auto; padding: 14px; font-size: 14px; line-height: 1.62; color: var(--text-secondary); }
+  .pnl-body h4 { margin: 0 0 8px; font-size: 15.5px; color: var(--text); font-weight: 700; }
+  .pnl-body .ws-help-body { white-space: pre-line; }
+  .pnl-body .ws-lead { color: var(--text); font-weight: 600; margin-bottom: 8px; }
+  .pnl-body .ws-ex-cap { margin-top: 14px; font-size: 12px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted2); }
+  .pnl-body .ws-ex { margin: 5px 0 0; padding: 10px 12px; background: var(--field); border: 1px solid var(--border-soft); border-radius: 8px; font-family: var(--mono); font-size: 13px; line-height: 1.5; color: var(--text); white-space: pre; overflow-x: auto; }
+  .pnl-body .ws-cap { margin-top: 14px; font-size: 12px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted2); }
+  .pnl-body .ws-opts { margin: 9px 0 0; display: grid; gap: 6px; }
+  .pnl-body .ws-opt { display: grid; grid-template-columns: auto 1fr; gap: 9px; align-items: baseline; }
+  .pnl-body .ws-opt code { font-family: var(--mono); font-size: 12.5px; background: var(--field); border: 1px solid var(--border-soft); border-radius: 5px; padding: 1px 6px; color: var(--text); white-space: nowrap; }
+  .pnl-body .ws-steps { margin: 9px 0 0; padding-left: 20px; display: grid; gap: 5px; }
+  .pnl-body .ws-steps li { padding-left: 2px; }
+  .pnl-body .ws-diagram-cap { margin-top: 14px; font-size: 12px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted2); }
+  .pnl-body .ws-help-diagram { margin-top: 6px; padding: 14px 12px; background: var(--field); border: 1px solid var(--border-soft); border-radius: 10px; text-align: center; }
+  /* Fixed, natural diagram size — centered, NOT stretched to the panel width
+     (auto-stretch looked wrong). Scales down only if the panel is narrower. */
+  .pnl-body .ws-help-diagram svg { width: 300px; max-width: 100%; height: auto; display: inline-block; }
+  /* Educational diagram theming (the embedded tools' svg* diagrams render here
+     in the Details panel; their classes are styled cream-side). */
+  .ws-help-diagram .node { rx: 6; ry: 6; stroke-width: 1.5; }
+  .ws-help-diagram .node-green { fill: var(--ok-bg); stroke: var(--ok); }
+  .ws-help-diagram .node-red { fill: var(--bad-bg); stroke: var(--bad); }
+  .ws-help-diagram .node-blue { fill: var(--info-bg); stroke: var(--info); }
+  .ws-help-diagram .node-purple { fill: var(--purple-bg); stroke: var(--purple); }
+  .ws-help-diagram .node-amber { fill: var(--warn-bg); stroke: var(--amber); }
+  .ws-help-diagram .node-muted { fill: #f1ebdc; stroke: var(--border); }
+  .ws-help-diagram .node-accent { fill: var(--violet-bg); stroke: var(--violet); }
+  .ws-help-diagram .lbl { font-family: var(--font); font-size: 11px; fill: var(--text); text-anchor: middle; dominant-baseline: central; }
+  .ws-help-diagram .lbl-sm { font-size: 9.5px; fill: var(--muted); }
+  .ws-help-diagram .lbl-green { fill: var(--ok); } .ws-help-diagram .lbl-red { fill: var(--bad); }
+  .ws-help-diagram .lbl-blue { fill: var(--info); } .ws-help-diagram .lbl-purple { fill: var(--purple); }
+  .ws-help-diagram .lbl-amber { fill: var(--amber); } .ws-help-diagram .lbl-accent { fill: var(--violet); }
+  .ws-help-diagram .arrow { stroke: var(--muted); stroke-width: 1.3; fill: none; marker-end: url(#arrowHead); }
+  .ws-help-diagram .arrow-green { stroke: var(--ok); marker-end: url(#arrowGreen); }
+  .ws-help-diagram .arrow-red { stroke: var(--bad); marker-end: url(#arrowRed); }
+  /* Presentation animation: dashes flow along the arrows to show the direction
+     of data/control flow through the mechanism (user request: "show how the flow runs"). */
+  .ws-help-diagram .arrow, .ws-help-diagram .arrow-green, .ws-help-diagram .arrow-red {
+    stroke-dasharray: 5 4; animation: wsFlow 1.2s linear infinite;
+  }
+  .ws-help-diagram .dash { stroke-dasharray: 4 3; }
+  @keyframes wsFlow { to { stroke-dashoffset: -18; } }
+  /* Per-phase presentation: each labeled phase/case lights up in turn, looping,
+     so a multi-phase mechanism reads phase-by-phase (user request: "an animation
+     for every phase"). duration + per-phase delay are set inline by DG.phases so any phase
+     count sequences correctly. */
+  /* Every phase stays FULLY readable; the active one pulses a soft accent glow in
+     turn (no dimming — dimmed text is unreadable on the cream bg). */
+  .ws-help-diagram .ws-phase, .ws-play .ws-phase { animation-name: wsPhase; animation-timing-function: ease-in-out; animation-iteration-count: infinite; }
+  @keyframes wsPhase { 0%,4%,42%,100% { filter: none; } 14%,28% { filter: drop-shadow(0 0 6px var(--violet)); } }
+  @media (prefers-reduced-motion: reduce) {
+    .ws-help-diagram .arrow, .ws-help-diagram .arrow-green, .ws-help-diagram .arrow-red { animation: none; }
+    .ws-help-diagram .ws-phase, .ws-play .ws-phase { animation: none !important; filter: none !important; }
+  }
+  /* Interactive resolution "playground" (parallel_key examples): per-config cards
+     whose rows (template → resolved → merge) light up in turn. Click a card to
+     replay its animation. */
+  .pnl-body .ws-play { margin: 8px 0 0; display: grid; gap: 11px; }
+  .pnl-body .ws-play-card { background: var(--field); border: 1px solid var(--border-soft); border-radius: 9px; padding: 9px 11px; cursor: pointer; }
+  .pnl-body .ws-play-card:hover { border-color: var(--faint2); }
+  .pnl-body .ws-play-card.replay .ws-phase { animation: none; }
+  .pnl-body .ws-play-head { font-family: var(--mono); font-size: 12px; color: var(--violet); font-weight: 600; margin-bottom: 6px; }
+  .pnl-body .ws-play-row { display: flex; gap: 8px; align-items: baseline; padding: 1px 0; }
+  .pnl-body .ws-play-row .lab { font-size: 10px; color: var(--muted); min-width: 66px; flex: 0 0 auto; text-transform: uppercase; letter-spacing: 0.04em; }
+  .pnl-body .ws-play-row .val { font-family: var(--mono); font-size: 12px; color: var(--text); word-break: break-all; }
+  .pnl-body .ws-play .hl { background: var(--violet-bg); color: var(--violet); border-radius: 4px; padding: 0 3px; }
+  .pnl-body .ws-play .gone { color: var(--muted); text-decoration: line-through; }
+  .pnl-body .ws-play-note { font-family: var(--font); font-size: 11px; color: var(--muted); margin-top: 5px; }
+  /* The rail is 44px wide. Two controls abreast overflowed it and pressed on
+     the frame; stacked, each keeps its own room. */
+  #panel.collapsed .pnl-head { padding: 11px 0; flex-direction: column;
+    align-items: center; justify-content: center; gap: 6px; }
+  #panel.collapsed .pnl-title, #panel.collapsed .pnl-body { display: none; }
+  /* Held shut. Visible in BOTH states, because in the collapsed rail it is the
+     only thing that explains why clicking help does nothing. */
+  /* Wider than a plain icon button: the glyph is a padlock AND where the panel
+     goes. Same height as its neighbour so the pair reads as one row. */
+  .pnl-hold { width: 34px; height: 28px; border-radius: 7px; border: 1px solid transparent;
+    background: none; color: var(--muted2); cursor: pointer; display: flex;
+    align-items: center; justify-content: center; flex: 0 0 auto;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease; }
+  .pnl-hold:hover { background: var(--field); color: var(--text); }
+  .pnl-hold.on { color: var(--purple); border-color: var(--purple); background: rgba(94,84,168,0.10); }
+  /* A help click that the hold refused: the control that refused it says so,
+     once, in place — a shake plus a label, because a shake alone tells you
+     something happened without telling you what. */
+  .pnl-hold.nudge { animation: pnlNudge 0.44s cubic-bezier(0.36,0.07,0.19,0.97); }
+  @keyframes pnlNudge {
+    0%, 100% { transform: translateX(0); }
+    12% { transform: translateX(-4px) rotate(-7deg); }
+    32% { transform: translateX(4px) rotate(7deg); }
+    54% { transform: translateX(-3px) rotate(-4deg); }
+    76% { transform: translateX(2px); }
+  }
+  .pnl-hold-say { position: absolute; z-index: 70; right: 46px; white-space: nowrap;
+    background: var(--dark); color: var(--on-dark); font-size: 11.5px; font-weight: 600;
+    padding: 5px 10px; border-radius: 7px; box-shadow: 0 3px 12px rgba(0,0,0,0.18);
+    pointer-events: none; animation: pnlSay 2.1s ease forwards; }
+  #panel.collapsed .pnl-hold-say { right: 46px; }
+  @keyframes pnlSay {
+    0% { opacity: 0; transform: translateX(6px); }
+    12%, 74% { opacity: 1; transform: translateX(0); }
+    100% { opacity: 0; transform: translateX(6px); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pnl-hold.nudge { animation: none; }
+    .pnl-hold-say { animation: none; opacity: 1; }
+  }
+  .error-banner { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 30; background: var(--bad-bg); color: var(--bad); border: 1px solid rgba(162,59,41,0.2); border-radius: 9px; padding: 6px 12px; font-size: 12px; }
+  #wsToast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: var(--dark); color: var(--on-dark); padding: 8px 18px; border-radius: 9px; font-size: 12.5px; box-shadow: 0 4px 16px rgba(0,0,0,0.18); opacity: 0; pointer-events: none; transition: opacity 0.2s ease; z-index: 100; max-width: 70vw; }
+  #wsToast.show { opacity: 1; }
+
+  /* ── Hint bubble ──────────────────────────────────────────────────────────
+     ONE element that morphs between two geometries, so the circle visibly
+     becomes the card rather than being swapped for it. Collapsed and expanded
+     both pin `left` AND `right` (collapsed derives its width from them, see
+     below) — mixing `width` with `right` would make `left` non-animatable and
+     the morph would jump. Lives inside #main, so "the top
+     of the canvas" is literal: it covers the canvas, not the topbar or the
+     Details panel. */
+  #hintBubble {
+    /* One inset for top and right so the corner reads as square. --hint-sb is
+       the embedded tool's own scrollbar width, measured at runtime (native
+       scrollbars are OS/UA-sized, so it cannot be hardcoded): #main's right
+       edge is BEHIND that bar, so without the allowance a 14px `right` lands
+       the circle flush against the rail with no visible gap. Every dimension
+       derives from these three vars — the collapsed width is
+       (100% - left - right) and silently breaks if one is changed alone. */
+    --hint-gap: 14px;
+    --hint-sb: 0px;
+    --hint-size: 44px;
+    position: absolute; z-index: 60;
+    top: var(--hint-gap);
+    right: calc(var(--hint-gap) + var(--hint-sb));
+    left: calc(100% - var(--hint-gap) - var(--hint-sb) - var(--hint-size));
+    height: var(--hint-size);
+    background: var(--dark); color: var(--on-dark);
+    border: none; border-radius: calc(var(--hint-size) / 2); padding: 0; margin: 0;
+    font-family: inherit; text-align: left; cursor: pointer; overflow: hidden;
+    box-shadow: 0 3px 12px rgba(0,0,0,0.20);
+    transition: left 0.42s cubic-bezier(0.33,1,0.68,1),
+                height 0.42s cubic-bezier(0.33,1,0.68,1),
+                border-radius 0.42s ease,
+                box-shadow 0.3s ease;
+  }
+  #hintBubble.hidden { display: none; }
+  /* Entry: a hand-authored bounce (big overshoot → counter-settle → rest) with
+     a slight rotation so it reads as landing rather than merely scaling. The
+     bounce is in the keyframes, so the timing function stays a plain ease-out —
+     pairing it with a springy bezier double-counts the overshoot and wobbles. */
+  #hintBubble.entering { animation: hintPop 0.72s ease-out both; }
+  @keyframes hintPop {
+    0%   { opacity: 0; transform: scale(0.10) translateY(-18px) rotate(-14deg); }
+    50%  { opacity: 1; transform: scale(1.24) translateY(5px)  rotate(5deg); }
+    72%  { opacity: 1; transform: scale(0.93) translateY(-3px) rotate(-3deg); }
+    88%  { opacity: 1; transform: scale(1.04) translateY(1px)  rotate(1deg); }
+    100% { opacity: 1; transform: scale(1)    translateY(0)    rotate(0); }
+  }
+  #hintBubble .hint-ring {
+    position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    box-shadow: 0 0 0 0 rgba(45,42,36,0.5);
+  }
+  #hintBubble.entering .hint-ring { animation: hintRing 1.6s ease-out 0.62s 3; }
+  @keyframes hintRing {
+    0%   { box-shadow: 0 0 0 0 rgba(45,42,36,0.5); }
+    100% { box-shadow: 0 0 0 26px rgba(45,42,36,0); }
+  }
+  #hintBubble:not(.open):hover { box-shadow: 0 5px 18px rgba(0,0,0,0.28); }
+  /* Collapsed glyph — fills the 44px circle, gone once expanded. The UA button
+     reset is load-bearing, not tidiness: this button covers the whole collapsed
+     circle, so without it the browser paints `buttonface` (light) over the dark
+     bubble and the glyph inherits the default dark text — the circle rendered
+     inverted. Every other button in this file resets the same way. */
+  #hintBubble .hint-glyph {
+    position: absolute; top: 0; right: 0; width: var(--hint-size); height: var(--hint-size);
+    display: flex; align-items: center; justify-content: center;
+    background: transparent; border: none; padding: 0; margin: 0;
+    -webkit-appearance: none; appearance: none;
+    color: inherit; font: inherit; cursor: pointer;
+    opacity: 1; transition: opacity 0.16s ease;
+  }
+  #hintBubble .hint-glyph:focus-visible { outline: 2px solid var(--amber); outline-offset: -4px; border-radius: inherit; }
+  #hintBubble.open .hint-glyph { opacity: 0; pointer-events: none; }
+  /* Expanded card body — fades in after the geometry has mostly settled. */
+  #hintBubble .hint-card {
+    opacity: 0; pointer-events: none; padding: 16px 18px 14px;
+    transition: opacity 0.2s ease;
+  }
+  #hintBubble.open { cursor: default; left: var(--hint-gap); border-radius: 14px; box-shadow: 0 10px 34px rgba(0,0,0,0.30); }
+  #hintBubble.open .hint-card { opacity: 1; pointer-events: auto; transition-delay: 0.22s; }
+  .hint-eyebrow { font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--amber); }
+  .hint-title { margin: 6px 0 7px; font-size: 15px; font-weight: 700; color: var(--on-dark); padding-right: 30px; }
+  .hint-body { font-size: 13px; line-height: 1.6; color: #D9D3C6; }
+  .hint-body code { font-family: var(--mono); font-size: 12.5px; background: rgba(246,242,233,0.10); border-radius: 5px; padding: 1px 5px; color: var(--on-dark); }
+  .hint-foot { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+  .hint-never { display: flex; align-items: center; gap: 7px; flex: 1; font-size: 12px; color: #B8B2A4; cursor: pointer; user-select: none; }
+  .hint-never input { accent-color: var(--amber); width: 14px; height: 14px; cursor: pointer; margin: 0; }
+  /* Browsing arrows. Hidden (not removed) with a single hint, so the footer
+     never reflows between hints of different list lengths. */
+  .hint-nav { display: flex; align-items: center; gap: 3px; }
+  .hint-nav-b { border: none; border-radius: 7px; width: 26px; height: 26px; background: rgba(255,255,255,0.07); color: #E8E2D4; font-family: inherit; font-size: 16px; line-height: 1; cursor: pointer; }
+  .hint-nav-b:hover:not(:disabled) { background: rgba(255,255,255,0.15); }
+  .hint-nav-b:disabled { opacity: 0.3; cursor: default; }
+  .hint-pos { min-width: 36px; text-align: center; font-size: 11.5px; color: #B8B2A4; font-variant-numeric: tabular-nums; }
+  .hint-ok { border: none; border-radius: 8px; padding: 7px 16px; background: var(--on-dark); color: var(--dark); font-family: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+  .hint-ok:hover { background: #fff; }
+  .hint-x { position: absolute; top: 10px; right: 10px; width: 26px; height: 26px; border: none; border-radius: 7px; background: transparent; color: #B8B2A4; font-size: 17px; line-height: 1; cursor: pointer; }
+  .hint-x:hover { background: rgba(246,242,233,0.12); color: var(--on-dark); }
+  @media (prefers-reduced-motion: reduce) {
+    #hintBubble, #hintBubble .hint-card, #hintBubble .hint-glyph { transition-duration: 0.01s; }
+    #hintBubble.entering { animation: none; }
+    #hintBubble.entering .hint-ring { animation: none; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="topbar">
+    <div class="tb-left">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="flex:0 0 auto">
+        <rect x="2.5" y="2.5" width="19" height="19" rx="5" stroke="#5E54A8" stroke-width="1.6"/>
+        <circle cx="8" cy="8" r="2" fill="#8B7FD4"/><circle cx="8" cy="16" r="2" fill="#5BA8A0"/><circle cx="16" cy="12" r="2" fill="#D9A05B"/>
+        <path d="M9.6 8.6 14.4 11.4M9.6 15.4 14.4 12.6" stroke="#B0A892" stroke-width="1.3"/>
+      </svg>
+      <span class="tb-brand">Workflow Studio</span>
+      <span class="tb-sep"></span>
+      <span class="tb-context" id="tbContext"></span>
+    </div>
+    <div id="switch">
+      <button class="switch-btn" data-section="editor" onclick="setSection('editor')">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M4 20h16M4 20v-3l10-10 3 3L7 20H4z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M13 7l3 3" stroke="currentColor" stroke-width="1.7"/></svg>
+        Editor
+      </button>
+      <button class="switch-btn" data-section="traces" onclick="setSection('traces')">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M4 6h16M4 12h10M4 18h13" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="18" cy="12" r="2" fill="currentColor"/></svg>
+        Traces
+      </button>
+      <button class="switch-btn" data-section="messages" onclick="setSection('messages')" title="Agent Messages — questions the runs are asking you">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-4 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+        Messages<span class="msg-badge" id="msgBadge" style="display:none"></span>
+      </button>
+    </div>
+    <div class="tb-right">
+      <button class="switch-btn tb-act" id="btnExample" style="display:none;color:var(--purple)" title="Load a full-featured example workflow" onclick="editorExample()">Example</button>
+      <button class="switch-btn tb-act" id="btnGoTraces" style="display:none" title="Show this workflow's traces" onclick="goToTracesForSelected()">Go to traces →</button>
+      <button class="switch-btn tb-act" id="btnExportTrace" style="display:none" title="Download the selected run's trace.json" onclick="exportSelectedTrace()">Export trace</button>
+      <div class="live-dot" id="liveDot" title="Live — polling the project"><span class="d"></span><span id="liveLabel">offline</span></div>
+    </div>
+  </div>
+
+  <div id="bodyrow">
+    <div id="sidebar"></div>
+    <div id="main">
+      <iframe id="editorFrame" class="studio-frame hidden" title="Workflow Editor"></iframe>
+      <iframe id="traceFrame" class="studio-frame hidden" title="Trace Viewer"></iframe>
+      <div id="messagesPane" class="hidden"></div>
+      <div id="placeholder" class="placeholder"></div>
+      <!-- Hint bubble: circle → card morph over the top of the canvas. Hidden
+           until the boot delay elapses AND an undismissed hint exists. -->
+      <div id="hintBubble" class="hidden">
+        <span class="hint-ring" aria-hidden="true"></span>
+        <button class="hint-glyph" id="hintOpen" aria-label="Show hint" aria-expanded="false" onclick="openHint()">
+          <svg width="21" height="21" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.5.4.8 1 .9 1.7h5.4c.1-.7.4-1.3.9-1.7A6 6 0 0 0 12 3z"
+                  stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <div class="hint-card" id="hintCard" role="dialog" aria-modal="false" aria-labelledby="hintTitle">
+          <button class="hint-x" onclick="closeHint()" aria-label="Close hint" title="Close">&times;</button>
+          <div class="hint-eyebrow" id="hintEyebrow">Hint</div>
+          <div class="hint-title" id="hintTitle"></div>
+          <div class="hint-body" id="hintBody"></div>
+          <div class="hint-foot">
+            <label class="hint-never">
+              <input type="checkbox" id="hintNever"> Don't show this again
+            </label>
+            <div class="hint-nav" id="hintNav">
+              <button class="hint-nav-b" id="hintPrev" onclick="hintStep(-1)" aria-label="Previous hint" title="Previous hint">&lsaquo;</button>
+              <span class="hint-pos" id="hintPos" aria-live="polite"></span>
+              <button class="hint-nav-b" id="hintNext" onclick="hintStep(1)" aria-label="Next hint" title="Next hint">&rsaquo;</button>
+            </div>
+            <button class="hint-ok" onclick="closeHint()">Got it</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="ft-resize" id="resize"></div>
+    <div id="panel">
+      <div class="pnl-head">
+        <span class="pnl-title" id="pnlTitle">Details</span>
+        <button class="pnl-hold" id="pnlHold" title="Hold Details closed" onclick="togglePanelHold()">
+          <svg id="pnlHoldIcon" width="25" height="18" viewBox="0 0 32 24" fill="none"></svg>
+        </button>
+        <button class="ft-quiet-soft" id="pnlChevronBtn" style="width:26px;height:26px;border-radius:7px" title="Collapse panel" onclick="togglePanel()">
+          <svg id="pnlChevron" width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+      <div class="pnl-body" id="pnlBody"></div>
+    </div>
+  </div>
+</div>
+<div id="wsToast"></div>
+<input type="file" id="wsWfInput" accept=".yaml,.yml" style="display:none" onchange="onWfFileChosen(event)">
+<input type="file" id="wsTraceInput" accept=".json,.trace.json" style="display:none" onchange="onTraceFileChosen(event)">
+
+<script>
+"use strict";
+/* ═══════════════════════════════════════════════════════════════════════
+   Workflow Studio shell. The two embedded tools (workflow-editor.html,
+   trace-viewer.html) run verbatim in same-origin iframes; this shell drives
+   selection + re-theming + the Details panel. See notes/open-questions.md
+   (architecture pivot) for the rationale.
+   ═══════════════════════════════════════════════════════════════════════ */
+const POLL_MS = 5000;
+
+const state = {
+  section: 'editor',
+  apiBase: '', baseResolved: false, projectSlug: null, projectName: 'Project',
+  projects: [], workflows: [], runsByWorkflow: {},
+  selectedWorkflow: null, selectedRun: null, directTracePath: null,
+  // Agent Messages: the run-inbox cross-run poll + the selected run filter.
+  // token = the per-serve rl_token this page was served with; every mutating
+  // POST echoes it (X-Riglane-Token) — without it the server answers 403.
+  token: null, inboxAll: [], msgRun: null,
+  openFolders: {}, live: false, loading: true, error: null,
+  // Details starts folded away: it is a reference you reach for, not something
+  // that should be taking a third of the canvas before you have asked it
+  // anything. Opening it once is one click; getting the space back is not.
+  sidebarCollapsed: false, panelCollapsed: true, panelHeld: false, panelWidth: 336,
+  editorLoadedFor: null,   // workflow name currently loaded in the editor iframe
+  editorWatchMtime: null,  // mtime of the loaded workflow (live external-edit watch)
+  editorNew: false,        // a fresh unsaved workflow is open (New) — shows Example
+  _openProjectShown: false,
+  _menuFor: null,          // workflow name whose row context-menu (3-dots) is open
+};
+
+/* ── URL contract ── */
+function readUrl() {
+  let p; try { p = new URLSearchParams(location.search); } catch { p = new URLSearchParams(); }
+  const section = p.get('section');
+  if (section === 'editor' || section === 'traces' || section === 'messages') state.section = section;
+  state.selectedWorkflow = p.get('workflow') || null;
+  state.selectedRun = p.get('run') || null;
+  state.directTracePath = p.get('trace') || null;
+  state.token = p.get('rl_token') || null;
+  const proj = p.get('project');
+  if (proj) { state.projectName = proj; state.projectSlug = proj; }
+  if (state.directTracePath) state.section = 'traces';
+  if (state.selectedWorkflow) state.openFolders[state.selectedWorkflow] = true;
+}
+function writeUrl() {
+  let u; try { u = new URL(location.href); } catch { return; }
+  const sp = u.searchParams;
+  sp.set('section', state.section);
+  if (state.selectedWorkflow) sp.set('workflow', state.selectedWorkflow); else sp.delete('workflow');
+  if (state.selectedRun) sp.set('run', state.selectedRun); else sp.delete('run');
+  try { history.replaceState(null, '', u.toString()); } catch {}
+}
+
+/* ── Fetch helpers ── */
+async function fetchText(url) { try { const r = await fetch(url, { cache: 'no-store' }); if (!r.ok) return null; return await r.text(); } catch { return null; } }
+async function fetchJson(url) { const t = await fetchText(url); if (t === null) return null; try { return JSON.parse(t); } catch { return null; } }
+/* Headers for the token-gated POSTs (run / respond / validate / write). */
+function apiHeaders() {
+  const h = { 'Content-Type': 'application/json' };
+  if (state.token) h['X-Riglane-Token'] = state.token;
+  return h;
+}
+
+/* ── Agent Messages (run inbox) ── */
+async function loadInbox() {
+  const list = await fetchJson(state.apiBase + '/api/inbox.json');
+  return Array.isArray(list) ? list.filter(m => m && typeof m.message_id === 'string') : [];
+}
+/* The three states a stored question can be in — the SAME reading the engine
+   uses (inbox.ts messageState). It used to be `!m.response` here, which meant a
+   question the run had retired still counted as pending, still showed answer
+   buttons, and every press came back refused. */
+function msgState(m) {
+  if (m.response) return 'answered';
+  if (m.superseded_by) return 'superseded';
+  return 'open';
+}
+function msgPending(m) { return msgState(m) === 'open'; }
+function inboxPendingCount() { return state.inboxAll.filter(msgPending).length; }
+function inboxByRun() {
+  const byRun = {};
+  for (const m of state.inboxAll) (byRun[m.run_id] ||= []).push(m);
+  return byRun;
+}
+
+async function loadProjects() {
+  const list = await fetchJson('/api/projects.json');
+  return Array.isArray(list) ? list.filter(p => p && typeof p.slug === 'string' && typeof p.base === 'string') : [];
+}
+async function loadWorkflows() {
+  const list = await fetchJson(state.apiBase + '/api/workflows.json');
+  return Array.isArray(list) ? list : [];
+}
+function runSortKey(r) {
+  const m = /-(\d{8}-\d{6})-/.exec(r.run_id || '');
+  if (m) return m[1];
+  if (r.started_at) { const d = new Date(r.started_at); if (!Number.isNaN(d.getTime())) { const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`; } }
+  return r.run_id || '';
+}
+async function loadRunsByWorkflow() {
+  const jsonl = await fetchText(state.apiBase + '/local/workflow_runs/index.jsonl');
+  const byWf = {};
+  if (jsonl === null) return byWf;
+  const ids = new Map();
+  for (const line of jsonl.split(/\r?\n/)) { if (!line.trim()) continue; try { const ev = JSON.parse(line); if (ev.run_id && ev.workflow) ids.set(ev.run_id, ev.workflow); } catch {} }
+  const metas = await Promise.all([...ids.keys()].map(async id => {
+    const man = await fetchJson(state.apiBase + `/local/workflow_runs/${id}/manifest.json`);
+    if (!man) return { run_id: id, workflow: ids.get(id), status: 'unknown' };
+    return { run_id: man.run_id || id, workflow: man.workflow || ids.get(id), status: man.status || 'unknown', started_at: man.started_at, updated_at: man.updated_at, params: man.params };
+  }));
+  for (const m of metas) { if (!m.workflow) continue; (byWf[m.workflow] ||= []).push(m); }
+  for (const wf of Object.keys(byWf)) byWf[wf].sort((a, b) => runSortKey(b).localeCompare(runSortKey(a)));
+  return byWf;
+}
+function computeSignature(projects, workflows, runsByWorkflow, inboxAll) {
+  return JSON.stringify([
+    state.apiBase,
+    projects.map(p => [p.slug, p.base]),
+    workflows.map(w => [w.name, w.category, w.mtime]),
+    Object.keys(runsByWorkflow).sort().map(wf => [wf, runsByWorkflow[wf].map(r => [r.run_id, r.status, r.updated_at || ''])]),
+    (inboxAll || []).map(m => [m.message_id, m.response ? m.response.type : null]),
+  ]);
+}
+
+let _sig = ''; let _busy = false;
+function resolveInitialBase(projects) {
+  const bySlug = state.projectSlug ? projects.find(p => p.slug === state.projectSlug) : null;
+  const direct = projects.find(p => p.base === '');
+  if (bySlug) { state.apiBase = bySlug.base; state.projectName = bySlug.slug; }
+  else if (direct) { state.apiBase = ''; state.projectName = direct.slug; }
+}
+async function refresh() {
+  if (_busy) return; _busy = true;
+  try {
+    const projects = await loadProjects();
+    if (!state.baseResolved) { resolveInitialBase(projects); state.baseResolved = true; renderTopbar(); }
+    const [workflows, runsByWorkflow, inboxAll] = await Promise.all([loadWorkflows(), loadRunsByWorkflow(), loadInbox()]);
+    state.live = true; state.error = null;
+    const sig = computeSignature(projects, workflows, runsByWorkflow, inboxAll);
+    if (sig !== _sig) {
+      _sig = sig;
+      state.projects = projects; state.workflows = workflows; state.runsByWorkflow = runsByWorkflow;
+      state.inboxAll = inboxAll;
+      renderSidebar(); renderMain(); renderTopbar();
+    }
+    renderLive();
+    watchEditorWorkflow();
+  } catch (e) { state.live = false; state.error = (e && e.message) ? e.message : String(e); renderLive(); }
+  finally { _busy = false; state.loading = false; }
+}
+function switchProject(entry) {
+  state.apiBase = entry.base; state.projectName = entry.slug;
+  state.selectedWorkflow = null; state.selectedRun = null; state.editorLoadedFor = null; state.editorNew = false;
+  _sig = ''; state.loading = true; writeUrl(); renderTopbar(); void refresh();
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = String(s == null ? '' : s); return d.innerHTML; }
+
+const CATEGORIES = [
+  { key: 'my_workflows', label: 'My workflows', color: 'var(--violet)', bg: 'var(--violet-bg)' },
+  { key: 'predefined', label: 'Predefined', color: 'var(--info)', bg: 'var(--info-bg)' },
+  { key: 'examples', label: 'Examples', color: 'var(--amber)', bg: 'var(--warn-bg)' },
+];
+function statusColor(s) { return s === 'completed' ? 'var(--ok)' : s === 'failed' ? 'var(--bad)' : s === 'in_progress' ? 'var(--info)' : 'var(--warn)'; }
+function runTimeLabel(r) {
+  const m = /-(\d{8})-(\d{6})-/.exec(r.run_id || '');
+  if (m) { const d = m[1], t = m[2]; return `${d.slice(6,8)}.${d.slice(4,6)}.${d.slice(0,4)} ${t.slice(0,2)}:${t.slice(2,4)}`; }
+  if (r.started_at) { const dt = new Date(r.started_at); if (!Number.isNaN(dt.getTime())) { const p = n => String(n).padStart(2, '0'); return `${p(dt.getDate())}.${p(dt.getMonth()+1)}.${dt.getFullYear()} ${p(dt.getHours())}:${p(dt.getMinutes())}`; } }
+  return r.run_id || '(run)';
+}
+function workflowByName(name) { return state.workflows.find(w => w.name === name) || null; }
+
+/* ── Top bar ── */
+function hasProject() { return state.projects.some(p => p.base === state.apiBase) || state.workflows.length > 0 || state.apiBase !== ''; }
+function renderTopbar() {
+  document.querySelectorAll('.switch-btn[data-section]').forEach(b => b.classList.toggle('active', b.dataset.section === state.section));
+  const name = hasProject() ? state.projectName : 'No project';
+  const modeLabel = state.section === 'editor'
+    ? (state.selectedWorkflow ? `Editor · ${state.selectedWorkflow}` : 'Editor')
+    : state.section === 'messages'
+      ? (state.msgRun ? `Messages · ${state.msgRun}` : 'Messages')
+      : (state.selectedRun ? `Traces · ${state.selectedRun}` : (state.selectedWorkflow ? `Traces · ${state.selectedWorkflow}` : 'Traces'));
+  document.getElementById('tbContext').innerHTML = `<b>${esc(name)}</b><span class="dot">·</span>${esc(modeLabel)}`;
+  const editorActive = state.section === 'editor' && (!!state.selectedWorkflow || state.editorNew);
+  const hasWf = state.section === 'editor' && !!state.selectedWorkflow;
+  const show = (id, on) => { document.getElementById(id).style.display = on ? 'flex' : 'none'; };
+  show('btnExample', state.section === 'editor' && state.editorNew);
+  show('btnGoTraces', hasWf);
+  show('btnExportTrace', state.section === 'traces' && !!state.selectedRun);
+  // Pending-questions badge on the Messages switch — visible from every section.
+  const badge = document.getElementById('msgBadge');
+  if (badge) {
+    const n = inboxPendingCount();
+    badge.style.display = n > 0 ? 'inline-flex' : 'none';
+    badge.textContent = String(n);
+  }
+}
+function renderLive() {
+  const el = document.getElementById('liveDot');
+  el.classList.toggle('on', state.live);
+  el.title = state.live ? 'Live — polling the project' : 'Connection lost — retrying';
+  document.getElementById('liveLabel').textContent = state.live ? 'live' : 'offline';
+}
+
+/* ── Sidebar ── */
+function renderSidebar() {
+  const sb = document.getElementById('sidebar');
+  sb.classList.toggle('collapsed', state.sidebarCollapsed);
+  if (state.sidebarCollapsed) { sb.innerHTML = `<button class="ft-rail" title="Expand sidebar" onclick="toggleSidebar()">${iconSidebar()}</button>`; return; }
+  const name = hasProject() ? state.projectName : 'No project';
+  const body = state.section === 'editor' ? sidebarEditor()
+    : state.section === 'messages' ? sidebarMessages()
+    : sidebarTraces();
+  sb.innerHTML =
+    `<div class="sb-head"><div class="sb-title" title="${esc(name)}">${esc(name)}</div>
+       <button class="ft-quiet-soft" style="width:26px;height:26px;border-radius:7px" title="Collapse sidebar" onclick="toggleSidebar()">${iconChevronLeft()}</button></div>
+     <div class="sb-scroll">${body}</div>${sidebarFooter()}`;
+}
+function sidebarEditor() {
+  if (state.workflows.length === 0) return `<div style="padding:8px;font-size:12px;line-height:1.5;color:var(--muted)">No workflows found. Author one in <span class="mono">.riglane/workflows/templates/my_workflows/</span>, or use the predefined / example workflows.</div>`;
+  let html = '';
+  for (const cat of CATEGORIES) {
+    const items = state.workflows.filter(w => w.category === cat.key);
+    if (items.length === 0) continue;
+    html += `<div class="sa-sechead">${esc(cat.label)}</div>`;
+    for (const w of items) {
+      const active = state.selectedWorkflow === w.name;
+      const menu = state._menuFor === w.name
+        ? `<div class="ws-menu"><button onclick="copyWorkflowYaml('${esc(w.name)}')">Copy YAML</button></div>` : '';
+      html += `<div class="ws-rowwrap${active ? ' ft-row-active' : ''}">
+        <button class="ft-row" onclick="selectWorkflow('${esc(w.name)}')" title="${esc(w.name)}">
+          <span class="cat-badge" style="color:${cat.color};background:${cat.bg}">${esc(cat.label[0])}</span>
+          <span class="grow">${esc(w.name)}</span></button>
+        <button class="ws-dots" title="More" onclick="toggleRowMenu('${esc(w.name)}', event)">⋯</button>${menu}
+      </div>`;
+    }
+  }
+  return html;
+}
+function sidebarTraces() {
+  if (state.workflows.length === 0 && Object.keys(state.runsByWorkflow).length === 0)
+    return `<div style="padding:8px;font-size:12px;line-height:1.5;color:var(--muted)">No workflows or runs yet. Run a workflow — its traces appear here grouped in a folder.</div>`;
+  const catOf = {}; for (const w of state.workflows) catOf[w.name] = w.category;
+  const buckets = { my_workflows: [], predefined: [], examples: [], _other: [] };
+  const names = new Set(state.workflows.map(w => w.name));
+  for (const wf of Object.keys(state.runsByWorkflow)) names.add(wf);
+  for (const wf of [...names].sort()) { const cat = catOf[wf] || '_other'; (buckets[cat] || buckets._other).push(wf); }
+  const sections = [...CATEGORIES.map(c => ({ key: c.key, label: c.label })), { key: '_other', label: 'Other (runs only)' }];
+  let html = '';
+  for (const sec of sections) { const wfs = buckets[sec.key]; if (!wfs || wfs.length === 0) continue; html += `<div class="sa-sechead">${esc(sec.label)}</div>`; for (const wf of wfs) html += traceFolderRow(wf); }
+  return html;
+}
+function traceFolderRow(wf) {
+  const runs = state.runsByWorkflow[wf] || [];
+  const open = !!state.openFolders[wf];
+  let html = `<button class="ft-row${open ? ' folder-open' : ''}" onclick="toggleFolder('${esc(wf)}')" title="${esc(wf)}">
+    <span class="folder-caret">${iconCaret()}</span>${iconFolder()}<span class="grow">${esc(wf)}</span><span class="sub" style="flex:0 0 auto">${runs.length}</span></button>`;
+  if (open) {
+    if (runs.length === 0) html += `<div style="padding:2px 8px 4px 34px;font-size:11.5px;color:var(--muted)">no runs yet</div>`;
+    for (const r of runs) {
+      const active = state.selectedRun === r.run_id;
+      const scope = (r.params && typeof r.params.scope === 'string') ? r.params.scope : null;
+      html += `<button class="ft-row${active ? ' ft-row-active' : ''}" style="min-height:40px;padding-left:30px" onclick="selectRun('${esc(wf)}','${esc(r.run_id)}')" title="${esc(r.run_id)} (${esc(r.status)})">
+        <span class="row-2"><span class="grow" style="font-size:12.5px">${esc(runTimeLabel(r))}</span>
+          <span class="sub">${scope ? 'scope: ' + esc(scope) : ''}${r.status !== 'completed' ? (scope ? ' · ' : '') + esc(String(r.status).replace('_',' ')) : ''}</span></span>
+        <span class="status-dot${r.status === 'in_progress' ? ' sa-pulse' : ''}" style="background:${statusColor(r.status)}"></span></button>`;
+    }
+  }
+  return html;
+}
+/* Messages sidebar: only runs that HAVE inbox messages, grouped by workflow.
+   "All pending" on top is the default view — the queue you actually work. */
+function sidebarMessages() {
+  const byRun = inboxByRun();
+  const runIds = Object.keys(byRun);
+  if (runIds.length === 0)
+    return `<div style="padding:8px;font-size:12px;line-height:1.5;color:var(--muted)">No agent messages yet. When a run's human gate (or a loop/route decider) uses the inbox channel, its question appears here.</div>`;
+  const pendingTotal = inboxPendingCount();
+  let html = `<button class="ft-row${state.msgRun === null ? ' ft-row-active' : ''}" onclick="selectMsgRun(null)" title="All pending questions">
+    <span class="grow">All pending</span><span class="sub" style="flex:0 0 auto">${pendingTotal}</span></button>`;
+  const byWf = {};
+  for (const id of runIds) {
+    const wf = (byRun[id][0] && byRun[id][0].workflow) || '(unknown)';
+    (byWf[wf] ||= []).push(id);
+  }
+  for (const wf of Object.keys(byWf).sort()) {
+    html += `<div class="sa-sechead">${esc(wf)}</div>`;
+    for (const id of byWf[wf].sort().reverse()) {
+      const msgs = byRun[id];
+      const pending = msgs.filter(msgPending).length;
+      const active = state.msgRun === id;
+      const label = runTimeLabel({ run_id: id });
+      html += `<button class="ft-row${active ? ' ft-row-active' : ''}" style="min-height:40px" onclick="selectMsgRun('${esc(id)}')" title="${esc(id)}">
+        <span class="row-2"><span class="grow" style="font-size:12.5px">${esc(label)}</span>
+          <span class="sub">${msgs.length} message${msgs.length === 1 ? '' : 's'}${pending ? ' · ' + pending + ' pending' : ''}</span></span>
+        ${pending ? `<span class="status-dot sa-pulse" style="background:var(--amber)"></span>` : ''}</button>`;
+    }
+  }
+  return html;
+}
+function selectMsgRun(runId) { state.msgRun = runId; renderSidebar(); renderMain(); }
+
+function sidebarFooter() {
+  let picker = '';
+  if (state._openProjectShown) {
+    let rows = '';
+    if (state.projects.length === 0) rows = `<div style="padding:2px 8px 6px;font-size:11.5px;line-height:1.5;color:var(--muted)">No registered Riglane projects found. Run <span class="mono">riglane init</span> in a project.</div>`;
+    else for (const p of state.projects) {
+      const active = p.base === state.apiBase;
+      rows += `<button class="ft-row${active ? ' ft-row-active' : ''}" style="min-height:30px" onclick="onPickProject('${esc(p.base)}','${esc(p.slug)}')" title="${esc(p.slug)}">
+        ${iconFolder()}<span class="grow" style="font-size:12.5px">${esc(p.slug)}</span>${active ? '<span style="margin-left:auto;font-size:10px;font-weight:700;color:var(--violet)">●</span>' : ''}</button>`;
+    }
+    const manual = `<div style="padding:4px 2px 6px">
+      <div style="display:flex;gap:6px">
+        <input id="openProjPath" type="text" placeholder="…or a project directory path" spellcheck="false"
+          style="flex:1;min-width:0;height:28px;padding:0 8px;font:12px var(--mono,monospace);border:1px dashed var(--border);border-radius:7px;background:transparent;color:inherit"
+          onkeydown="if(event.key==='Enter')openProjectByPath()">
+        <button class="sa-dashed" style="height:28px;border-radius:7px;padding:0 10px;font-size:12px" onclick="openProjectByPath()">Open</button>
+      </div>
+      <div id="openProjErr" style="display:none;padding:4px 2px 0;font-size:11px;line-height:1.4;color:var(--bad)"></div>
+    </div>`;
+    picker = `<div style="margin-bottom:6px"><div class="sa-sechead">Registered projects</div><div style="max-height:180px;overflow-y:auto">${rows}</div>${manual}</div>`;
+  }
+  // Section-specific actions above the Open-project button (user feedback
+  // #5 New/Load in the sidebar; #11 Load trace above Open project).
+  let actions = '';
+  if (state.section === 'editor') {
+    actions = `<div style="display:flex;gap:6px;margin-bottom:6px">
+      <button class="sa-dashed" style="flex:1;height:32px;border-radius:8px;gap:6px;font-size:12px;justify-content:center" title="Start a new workflow" onclick="newWorkflowInEditor()">${iconPlus()} New</button>
+      <button class="sa-dashed" style="flex:1;height:32px;border-radius:8px;gap:6px;font-size:12px;justify-content:center" title="Load a workflow.yaml from disk" onclick="loadWorkflowFile()">${iconUpload()} Load</button>
+    </div>`;
+  } else if (state.section === 'traces') {
+    actions = `<button class="sa-dashed" style="width:100%;height:32px;border-radius:8px;gap:6px;font-size:12px;font-weight:600;margin-bottom:6px" title="Load a trace.json from disk" onclick="loadTraceFile()">${iconUpload()} Load trace</button>`;
+  }
+  return `<div class="sb-foot">${picker}${actions}<button class="sa-dashed" style="width:100%;height:34px;border-radius:9px;gap:8px;font-size:12.5px;font-weight:600" onclick="toggleOpenProject()">${iconFolder()} Open project</button></div>`;
+}
+
+/* ── Main / iframes ── */
+const editorFrame = document.getElementById('editorFrame');
+const traceFrame = document.getElementById('traceFrame');
+
+// Cream re-theme injected into each embedded tool (both are CSS-variable-
+// driven, so one variable override re-skins them). Also hides the tool's own
+// dark-theme toggle (D4 — light only) and forces the light theme attribute.
+const CREAM_VARS = `:root{
+  --bg:#F5F4F0;--bg-card:#FFFFFF;--bg-hover:#F1EBDC;--bg-section:#FCFAF5;
+  --text:#2A2722;--text-secondary:#6B655B;--text-muted:#9A9384;
+  --border:#EAE3D5;--border-light:#F0EADD;--accent:#5E54A8;--accent-light:#EDEAF8;
+  --green:#6F9448;--green-bg:#EEF3E2;--red:#A23B29;--red-bg:#FBEAE7;
+  --amber:#B08234;--amber-bg:#F8EFDC;--blue:#5B8DB8;--blue-bg:#E7EFF6;
+  --purple:#8B7EC8;--purple-bg:#EEEBF7;
+  --font:'Hanken Grotesk',ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,'SFMono-Regular',Menlo,monospace;
+}
+#btnTheme{display:none !important;}`;
+
+function themeFrame(frame) {
+  try {
+    const doc = frame.contentDocument;
+    if (!doc) return;
+    doc.documentElement.removeAttribute('data-theme'); // force light
+    if (!doc.getElementById('ws-cream')) {
+      const st = doc.createElement('style');
+      st.id = 'ws-cream';
+      st.textContent = CREAM_VARS;
+      doc.head.appendChild(st);
+    }
+    installHelpBridge(frame); // route the tool's tooltips → the Details panel
+  } catch (e) { /* cross-origin should not happen (same dir) — fail quiet */ }
+}
+
+editorFrame.addEventListener('load', () => {
+  themeFrame(editorFrame);
+  // Load the currently-selected workflow (or start a fresh one) into the
+  // freshly (re)loaded editor.
+  const cw = editorFrame.contentWindow;
+  // Drill-down hooks for the editor's graph view: a delegation step can open the
+  // workflow it hands off to. The editor cannot enumerate workflows on its own
+  // (it is a single-document tool), so the shell lends it these two.
+  if (cw) {
+    cw.__studioHasWorkflow = function (name) {
+      return !!(name && (state.workflows || []).some(function (w) { return w.name === name; }));
+    };
+    // The delegation picker needs the LIST, not just a membership test — the
+    // editor is a single document and cannot enumerate the project itself.
+    cw.__studioWorkflowNames = function () {
+      return (state.workflows || []).map(function (w) { return w.name; }).filter(Boolean);
+    };
+    cw.__studioOpenWorkflow = function (name) {
+      if (!cw.__studioHasWorkflow(name)) return false;
+      selectWorkflow(name);
+      return true;
+    };
+    // Writing back to disk needs the shell's server connection, so the Save
+    // button in the editor's own tab bar calls through to here.
+    cw.__studioSaveRequest = function () { saveWorkflow(); };
+    // So does REAL validation: the editor is one self-contained file and cannot
+    // import the engine, so its own check is a subset. Through the server it
+    // gets the very validator the CLI and the loader run.
+    cw.__studioValidate = function (yaml) { return validateViaServer(yaml); };
+    if (typeof cw.refreshSaveButton === 'function') cw.refreshSaveButton();
+  }
+  if (state.selectedWorkflow) loadWorkflowIntoEditor(state.selectedWorkflow, true);
+  else if (state.editorNew && cw && typeof cw.newWorkflow === 'function') cw.newWorkflow();
+});
+traceFrame.addEventListener('load', () => themeFrame(traceFrame));
+
+function ensureEditorLoaded() {
+  // Load the editor tool once; the load handler themes it + loads the workflow.
+  if (!editorFrame.getAttribute('src')) editorFrame.setAttribute('src', 'workflow-editor.html');
+}
+function loadWorkflowIntoEditor(name, force) {
+  const wf = workflowByName(name);
+  if (!wf) return;
+  if (!force && state.editorLoadedFor === name) return;
+  const url = state.apiBase + wf.path;
+  const cw = editorFrame.contentWindow;
+  if (cw && typeof cw.__studioLoad === 'function') {
+    cw.__studioLoad(url);
+    state.editorLoadedFor = name;
+    state.editorWatchMtime = wf.mtime;
+  }
+}
+// The viewer answers inbox questions from the human-gate dialog, so its
+// iframe URL carries the serve token through.
+function traceViewerSrc(path) {
+  return 'trace-viewer.html?trace=' + encodeURIComponent(path)
+    + (state.token ? '&rl_token=' + encodeURIComponent(state.token) : '');
+}
+function loadRunIntoTrace(runId) {
+  traceFrame.setAttribute('src', traceViewerSrc(state.apiBase + '/local/workflow_runs/' + runId + '/trace.json'));
+}
+function loadDirectTrace(path) {
+  traceFrame.setAttribute('src', traceViewerSrc(path));
+}
+
+// Live external-edit watch: when the selected workflow's mtime changes on disk
+// (the polling refresh picked up a new /api/workflows.json), reload it in the
+// editor so an outside edit shows immediately (user requirement #4).
+function watchEditorWorkflow() {
+  if (state.section !== 'editor' || !state.editorLoadedFor) return;
+  const wf = workflowByName(state.editorLoadedFor);
+  if (wf && state.editorWatchMtime != null && wf.mtime !== state.editorWatchMtime) {
+    loadWorkflowIntoEditor(state.editorLoadedFor, true);
+  }
+}
+
+function renderMain() {
+  const showEditor = state.section === 'editor';
+  const showTraces = state.section === 'traces';
+  const showMessages = state.section === 'messages';
+  const ph = document.getElementById('placeholder');
+  // Messages pane (shell-rendered — no iframe; the inbox is plain JSON).
+  const mp = document.getElementById('messagesPane');
+  if (showMessages) { renderMessagesPane(mp); mp.classList.remove('hidden'); }
+  else mp.classList.add('hidden');
+  // Editor pane (shown for a selected workflow OR a fresh New workflow)
+  if (showEditor && (state.selectedWorkflow || state.editorNew)) {
+    ensureEditorLoaded();
+    if (state.selectedWorkflow) loadWorkflowIntoEditor(state.selectedWorkflow, false);
+    editorFrame.classList.remove('hidden');
+  } else {
+    editorFrame.classList.add('hidden');
+  }
+  // Trace pane
+  if (showTraces && (state.selectedRun || state.directTracePath)) {
+    if (state.directTracePath) {
+      if (traceFrame.dataset.loadedTrace !== state.directTracePath) { loadDirectTrace(state.directTracePath); traceFrame.dataset.loadedTrace = state.directTracePath; }
+    } else if (state.selectedRun && traceFrame.dataset.loadedRun !== state.selectedRun) {
+      loadRunIntoTrace(state.selectedRun); traceFrame.dataset.loadedRun = state.selectedRun;
+    }
+    traceFrame.classList.remove('hidden');
+  } else {
+    traceFrame.classList.add('hidden');
+  }
+  // Placeholder (when nothing selected in the active section)
+  const emptyEditor = showEditor && !state.selectedWorkflow && !state.editorNew;
+  const emptyTraces = showTraces && !state.selectedRun && !state.directTracePath;
+  if (emptyEditor || emptyTraces) {
+    ph.style.display = 'flex';
+    ph.innerHTML = (state.error ? `<div class="error-banner">${esc(state.error)}</div>` : '') +
+      (emptyEditor
+        ? placeholderInner('Workflow Editor', 'Select a workflow from the left to open it in the editor. Workflows are grouped by category (my / predefined / examples).')
+        : placeholderInner('Trace Viewer', 'Expand a workflow folder on the left and pick a run to view its execution trace.'));
+  } else {
+    ph.style.display = 'none';
+  }
+  renderTopbar();
+  renderHint();
+}
+function placeholderInner(t, b) { return `<div class="inner"><div class="t">${esc(t)}</div><div class="b">${esc(b)}</div></div>`; }
+
+/* ── Agent Messages pane ──────────────────────────────────────────────────
+   Shell-rendered (no iframe): each card is one inbox message — the question a
+   run is asking, and either its recorded answer or the controls to give one.
+   Answering POSTs to /api/inbox/respond with the per-serve token; the engine
+   validates the response against the message's own allowed options and the
+   waiting orchestrator picks it up via its inbox poll. */
+const _msgDraft = {};   // message_id → { choice, text } (survives re-renders)
+
+function renderMessagesPane(mp) {
+  const all = state.inboxAll.slice();
+  const shown = state.msgRun === null ? all.filter(msgPending) : all.filter(m => m.run_id === state.msgRun);
+  if (shown.length === 0) {
+    mp.innerHTML = `<div class="msg-wrap"><div class="placeholder" style="position:static;min-height:50vh">${
+      placeholderInner('Agent Messages', state.msgRun === null
+        ? (all.length === 0
+            ? 'When a run\'s human gate (or a loop/route decider) uses the inbox channel, its question lands here — answer it without touching the terminal.'
+            : 'No pending questions. Pick a run on the left to see its answered messages.')
+        : 'This run has no messages.')}</div></div>`;
+    return;
+  }
+  // Oldest first within a run (the conversation order); pending view groups by run.
+  shown.sort((a, b) => String(a.message_id).localeCompare(String(b.message_id)));
+  let html = '<div class="msg-wrap">';
+  let lastRun = null;
+  for (const m of shown) {
+    if (state.msgRun === null && m.run_id !== lastRun) {
+      lastRun = m.run_id;
+      html += `<div class="msg-grouphead">${esc(m.workflow)} · ${esc(runTimeLabel({ run_id: m.run_id }))}</div>`;
+    }
+    html += messageCard(m);
+  }
+  mp.innerHTML = html + '</div>';
+}
+
+function messageCard(m) {
+  const pending = msgPending(m);
+  const kind = m.kind || 'human_gate';
+  const created = (m.created_at || '').replace('T', ' ').slice(0, 16);
+  const req = m.request
+    ? `${m.request.action}${m.request.args && Object.keys(m.request.args).length ? '\n' + JSON.stringify(m.request.args, null, 2) : ''}`
+    : '';
+  const grouped = Array.isArray(m.items) && m.items.length > 0;
+  let answer = '';
+  if (m.response) {
+    const r = m.response;
+    const itemLines = grouped && r.items
+      ? m.items.map(it => {
+          const a = r.items[it.id] || {};
+          return `<div class="msg-item-ans"><b>${esc(it.title)}</b> — ${esc(a.type || '?')}${a.text ? `: ${esc(a.text)}` : ''}${a.args ? ` <span class="mono">${esc(JSON.stringify(a.args))}</span>` : ''}</div>`;
+        }).join('')
+      : '';
+    answer = `<div class="msg-answer"><div class="who" style="cursor:help" title="About this record — opens Details" onclick="window.__wsHelp('inbox.response', '', '', true)">Answered · <b>${esc(r.type)}</b> via ${esc(r.via)} · ${esc((r.responded_at || '').replace('T', ' ').slice(0, 16))}</div>${
+      itemLines}${
+      !grouped && r.text ? `<div class="msg-body">${esc(r.text)}</div>` : ''}${
+      !grouped && r.args ? `<div class="msg-req">${esc(JSON.stringify(r.args, null, 2))}</div>` : ''}</div>`;
+  }
+  // The engine's own reading of the gated step's declared outputs —
+  // shown BESIDE the agent's prose so the human signs the artifact, not a
+  // retelling of it (live: a resume re-ask described "Hold" over an
+  // "Overweight" file).
+  const vcBlock = Array.isArray(m.verified_context) && m.verified_context.length > 0
+    ? `<div class="msg-vc"><div class="msg-vc-cap">Verified from disk — read by the engine at ask time, not composed by the agent</div>${
+        m.verified_context.map(v => v.exists
+          ? `<div class="msg-vc-file"><span class="mono">${esc(v.path)}</span>${v.mtime ? ` · written ${esc(String(v.mtime).replace('T', ' ').slice(0, 16))}` : ''}${
+              typeof v.value_preview === 'string' && v.value_preview
+                ? `<pre class="msg-vc-pre">${esc(v.value_preview)}${v.truncated ? '\n…' : ''}</pre>`
+                : v.binary ? ' · binary' : ''}</div>`
+          : `<div class="msg-vc-file"><span class="mono">${esc(v.path)}</span> · not written yet</div>`
+        ).join('')}</div>`
+    : '';
+  const itemsBlock = grouped ? m.items.map(it => msgItemBlock(m, it, pending)).join('') : '';
+  const sendAll = grouped && pending
+    ? `<div class="msg-actions"><button class="msg-btn send" onclick="msgSendItems('${esc(m.run_id)}','${esc(m.message_id)}')">${m.items.length === 1 ? 'Send answer' : 'Send all ' + m.items.length + ' answers'}</button>${m.items.length > 1 ? '<span class="msg-meta">every question above, in one exchange</span>' : ''}</div>`
+    : '';
+  const retired = msgState(m) === 'superseded'
+    ? `<div class="msg-answer"><div class="who">Superseded — its step asked again after the run continued, so this question can no longer be answered${m.superseded_by ? `. Live question: <span class="mono">${esc(m.superseded_by)}</span>` : ''}</div></div>`
+    : '';
+  return `<div class="msg-card${pending ? ' pending' : ''}${retired ? ' superseded' : ''}" id="msg-${esc(m.message_id)}">
+    <span class="msg-kind${kind === 'info' ? ' info' : ''}" style="cursor:help" title="What is this? — opens Details"
+      onclick="window.__wsHelp('inbox.message', '', '', true)">${esc(kind.replace('_', ' '))}</span>
+    <div class="msg-title">${esc(m.title)}</div>
+    <div class="msg-meta">${esc(m.workflow)} · step <b>${esc(m.step)}</b> · ${esc(created)} · <span class="mono">${esc(m.message_id)}</span></div>
+    ${m.body ? `<div class="msg-body">${esc(m.body)}</div>` : ''}
+    ${vcBlock}
+    ${req ? `<div class="msg-req">${esc(req)}</div>` : ''}
+    ${itemsBlock}${sendAll}
+    ${retired}${answer}
+    ${!grouped && pending ? messageControls(m) : ''}
+  </div>`;
+}
+
+/* One question of a grouped message: the controls MARK a selection; nothing
+   is sent until "Send all answers" posts the whole exchange. */
+function msgItemBlock(m, it, pending) {
+  const o = it.options || {};
+  const choices = (it.request && Array.isArray(it.request.choices)) ? it.request.choices : null;
+  // Free text (respond) is its own kind — it coexists with offered choices.
+  const canText = o.respond === true || o.edit === true;
+  const d = msgItemDraft(m.message_id, it.id);
+  let html = `<div class="msg-item"><div class="msg-item-t">${esc(it.title)}</div>`;
+  if (it.body) html += `<div class="msg-body" style="margin-top:2px">${esc(it.body)}</div>`;
+  if (it.request && it.request.action && !choices) html += `<div class="msg-req">${esc(it.request.action)}</div>`;
+  if (!pending) return html + '</div>';
+  if (o.accept || o.reject) {
+    html += '<div class="msg-actions" style="margin-top:6px">';
+    if (o.accept) html += `<button class="msg-btn accept${d.type === 'accept' ? ' sel' : ''}" title="Approve (marks the answer; Send all below submits)" onclick="msgItemPick('${esc(m.message_id)}','${esc(it.id)}','accept')">Accept</button>`;
+    if (o.reject) html += `<button class="msg-btn reject${d.type === 'reject' ? ' sel' : ''}" title="Refuse (marks the answer; Send all below submits)" onclick="msgItemPick('${esc(m.message_id)}','${esc(it.id)}','reject')">Reject</button>`;
+    html += '</div>';
+  }
+  if (choices) {
+    const rec = it.request.recommended;
+    html += `<div class="msg-choicecap">Pick one</div><div class="msg-choicelist">`;
+    for (const c of choices) html += `<button class="msg-choice${d.choice === c ? ' sel' : ''}" onclick="msgItemChoice('${esc(m.message_id)}','${esc(it.id)}','${esc(c)}')">${esc(c)}${c === rec ? '<span class="rec">recommended</span>' : ''}</button>`;
+    html += '</div>';
+  }
+  if (canText) html += `<textarea class="msg-text" placeholder="${o.edit && !o.respond ? 'Edited args (JSON) or instructions…' : 'Your answer…'}" oninput="msgItemText('${esc(m.message_id)}','${esc(it.id)}', this.value)">${esc(d.text || '')}</textarea>`;
+  return html + '</div>';
+}
+function msgItemDraft(msgId, itemId) {
+  const d = _msgDraft[msgId] || (_msgDraft[msgId] = { choice: null, text: '', items: {} });
+  if (!d.items) d.items = {};
+  return d.items[itemId] || (d.items[itemId] = { type: null, choice: null, text: '' });
+}
+function msgItemPick(msgId, itemId, type) {
+  const it = msgItemDraft(msgId, itemId);
+  it.type = it.type === type ? null : type; it.choice = null;
+  renderMain();
+}
+function msgItemChoice(msgId, itemId, c) {
+  const it = msgItemDraft(msgId, itemId);
+  it.choice = it.choice === c ? null : c; it.type = null;
+  renderMain();
+}
+function msgItemText(msgId, itemId, v) { msgItemDraft(msgId, itemId).text = v; }
+
+async function msgSendItems(runId, messageId) {
+  const m = state.inboxAll.find(x => x.message_id === messageId);
+  if (!m || !Array.isArray(m.items)) return;
+  const answers = {};
+  for (const it of m.items) {
+    const o = it.options || {};
+    const choices = (it.request && Array.isArray(it.request.choices)) ? it.request.choices : null;
+    const d = msgItemDraft(messageId, it.id);
+    if (d.type === 'accept' || d.type === 'reject') { answers[it.id] = { type: d.type }; continue; }
+    if (choices && d.choice) { answers[it.id] = { type: 'choice', text: d.choice }; continue; }
+    const t = (d.text || '').trim();
+    if (t && (o.respond || o.edit)) {
+      if (o.edit && !o.respond) {
+        let parsed = null; try { parsed = JSON.parse(t); } catch (e) {}
+        answers[it.id] = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+          ? { type: 'edit', args: parsed } : { type: 'edit', text: t };
+      } else answers[it.id] = { type: 'respond', text: t };
+      continue;
+    }
+    wsToast('Answer "' + it.title + '" first — a grouped message is sent in full');
+    return;
+  }
+  try {
+    const r = await fetch(state.apiBase + '/api/inbox/respond', {
+      method: 'POST', headers: apiHeaders(),
+      body: JSON.stringify({ run: runId, message_id: messageId, type: 'items', items: answers }),
+    });
+    let j = {}; try { j = await r.json(); } catch (e) {}
+    if (r.ok && j.ok) { wsToast('Answers recorded — the run continues'); delete _msgDraft[messageId]; _sig = ''; void refresh(); }
+    else if (r.status === 403) wsToast('The page was opened without its access token - re-open the studio from the URL riglane serve (or the run auto-open) printed, then answer again');
+    else wsToast('Respond failed: ' + (j.error || ('HTTP ' + r.status)));
+  } catch (e) { wsToast('Respond failed: ' + (e && e.message ? e.message : String(e))); }
+}
+
+function messageControls(m) {
+  const o = m.options || {};
+  const d = _msgDraft[m.message_id] || (_msgDraft[m.message_id] = { choice: null, text: '' });
+  const choices = (m.request && Array.isArray(m.request.choices) && m.request.choices.length) ? m.request.choices : null;
+  // Free text (respond) is its own kind — it coexists with offered choices.
+  const respondAllowed = o.respond === true;
+  let html = '';
+  // Yes/no first — green approve, red refuse; they answer immediately.
+  if (o.accept || o.reject) {
+    html += '<div class="msg-actions">';
+    if (o.accept) html += `<button class="msg-btn accept" title="Approve — answers immediately" onclick="msgRespond('${esc(m.run_id)}','${esc(m.message_id)}','accept')">Accept</button>`;
+    if (o.reject) html += `<button class="msg-btn reject" title="Refuse — the step is re-run with your feedback" onclick="msgRespond('${esc(m.run_id)}','${esc(m.message_id)}','reject')">Reject</button>`;
+    html += '</div>';
+  }
+  // Predefined alternatives: a stacked pick-one list (amber). Clicking an
+  // entry ANSWERS immediately (type 'choice') — no separate Send step.
+  if (choices) {
+    const rec = m.request.recommended;
+    html += `<div class="msg-choicecap">Pick one — answers immediately</div><div class="msg-choicelist">`;
+    for (const c of choices) html += `<button class="msg-choice" onclick="msgChoiceSend('${esc(m.run_id)}','${esc(m.message_id)}','${esc(c)}')">${esc(c)}${c === rec ? '<span class="rec">recommended</span>' : ''}</button>`;
+    html += '</div>';
+  }
+  // Free text and/or edited args — valid alongside the choices above.
+  if (respondAllowed || o.edit) {
+    html += `<textarea class="msg-text" placeholder="${o.edit && !respondAllowed ? 'Edited request args (JSON) or instructions…' : 'Your answer…'}" oninput="msgDraftText('${esc(m.message_id)}', this.value)">${esc(d.text)}</textarea>`;
+    html += `<div class="msg-actions"><button class="msg-btn send" title="Send your written answer" onclick="msgRespond('${esc(m.run_id)}','${esc(m.message_id)}','${respondAllowed ? 'respond' : 'edit'}')">Send</button></div>`;
+  }
+  return html;
+}
+function msgChoiceSend(runId, messageId, c) {
+  const d = _msgDraft[messageId] || (_msgDraft[messageId] = { choice: null, text: '' });
+  d.choice = c;
+  void msgRespond(runId, messageId, 'choice');
+}
+function msgDraftText(id, v) { const d = _msgDraft[id] || (_msgDraft[id] = { choice: null, text: '' }); d.text = v; }
+
+async function msgRespond(runId, messageId, type) {
+  const d = _msgDraft[messageId] || { choice: null, text: '' };
+  const body = { run: runId, message_id: messageId, type };
+  const m = state.inboxAll.find(x => x.message_id === messageId);
+  const choices = m && m.request && Array.isArray(m.request.choices) ? m.request.choices : null;
+  if (type === 'choice') {
+    if (!d.choice) { wsToast('Pick one of the offered choices first'); return; }
+    if (!choices || choices.indexOf(d.choice) < 0) { wsToast('That entry is not one of the offered choices'); return; }
+    body.text = d.choice;
+  } else if (type === 'respond' || type === 'edit') {
+    const t = (d.text || '').trim();
+    if (!t) { wsToast('Write the answer first'); return; }
+    // An edit response may carry structured args — accept JSON when it parses
+    // as an object, otherwise send the words as text.
+    if (type === 'edit') {
+      let parsed = null; try { parsed = JSON.parse(t); } catch (e) {}
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) body.args = parsed; else body.text = t;
+    } else body.text = t;
+  }
+  try {
+    const r = await fetch(state.apiBase + '/api/inbox/respond', { method: 'POST', headers: apiHeaders(), body: JSON.stringify(body) });
+    let j = {}; try { j = await r.json(); } catch (e) {}
+    if (r.ok && j.ok) { wsToast('Response recorded — the run continues'); delete _msgDraft[messageId]; _sig = ''; void refresh(); }
+    else if (r.status === 403) wsToast('The page was opened without its access token - re-open the studio from the URL riglane serve (or the run auto-open) printed, then answer again');
+    else wsToast('Respond failed: ' + (j.error || ('HTTP ' + r.status)));
+  } catch (e) { wsToast('Respond failed: ' + (e && e.message ? e.message : String(e))); }
+}
+
+/* ── Details panel (help routed from the embedded tools) ── */
+/* Two padlock glyphs — shut when held, open when not. Drawn rather than
+   imported so the panel carries no dependency for two icons. */
+const PNL_LOCK_BODY =
+  '<rect x="4.5" y="10.5" width="15" height="9.5" rx="2.4" stroke="currentColor" stroke-width="1.8"/>'
+  + '<circle cx="12" cy="15.2" r="1.5" fill="currentColor"/>';
+const PNL_HOLD_ICONS = {
+  // Shut, centred: the state speaks for itself and the tooltip says how to undo it.
+  held: '<g transform="translate(5.5 0)">'
+      + '<path d="M6.5 10.5V8a5.5 5.5 0 0 1 11 0v2.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>'
+      + PNL_LOCK_BODY + '</g>',
+  // Open, plus where it goes: to the right, out of the way.
+  free: '<path d="M6.5 10.5V8a5.5 5.5 0 0 1 10.4-2.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>'
+      + PNL_LOCK_BODY
+      + '<path class="pnl-hold-arrow" d="M26 10.6l3.4 4.1-3.4 4.1" stroke="currentColor" stroke-width="1.8" '
+      + 'stroke-linecap="round" stroke-linejoin="round"/>',
+};
+function togglePanelHold() {
+  state.panelHeld = !state.panelHeld;
+  // Holding it shut also shuts it: the point is to get it out of the way.
+  if (state.panelHeld && !state.panelCollapsed) state.panelCollapsed = true;
+  renderPanel();
+  savePrefs();
+}
+/* Something asked for Details while it is held. Say so at the control that is
+   refusing, rather than silently doing nothing. */
+let pnlSayTimer = null;
+function nudgePanelHold() {
+  const b = document.getElementById('pnlHold');
+  if (!b) return;
+  b.classList.remove('nudge');
+  void b.offsetWidth;                       // restart the animation
+  b.classList.add('nudge');
+  const head = b.parentNode;
+  head.querySelectorAll('.pnl-hold-say').forEach(function (x) { x.remove(); });
+  const say = document.createElement('div');
+  say.className = 'pnl-hold-say';
+  say.textContent = 'Details is held closed';
+  head.appendChild(say);
+  clearTimeout(pnlSayTimer);
+  pnlSayTimer = setTimeout(function () { say.remove(); }, 2100);
+}
+
+function renderPanel() {
+  const panel = document.getElementById('panel');
+  panel.classList.toggle('collapsed', state.panelCollapsed);
+  const hold = document.getElementById('pnlHold');
+  if (hold) {
+    hold.classList.toggle('on', !!state.panelHeld);
+    hold.title = state.panelHeld
+      ? 'Details is held closed — nothing you click will open it. Click to release.'
+      : 'Hold Details closed, so clicking help does not open it';
+    const ic = document.getElementById('pnlHoldIcon');
+    if (ic) ic.innerHTML = state.panelHeld ? PNL_HOLD_ICONS.held : PNL_HOLD_ICONS.free;
+  }
+  const chev = document.getElementById('pnlChevronBtn');
+  if (chev) chev.style.display = state.panelHeld ? 'none' : '';
+  panel.style.width = (state.panelCollapsed ? 44 : state.panelWidth) + 'px';
+  document.getElementById('resize').style.display = state.panelCollapsed ? 'none' : 'block';
+  // The panel is docked on the right, so the chevron points the way the panel
+  // will travel: shut, it points left ("this opens"); open, right ("this shuts").
+  document.getElementById('pnlChevron').style.transform = state.panelCollapsed ? 'rotate(180deg)' : 'none';
+  if (state.panelCollapsed) return;
+  if (!document.getElementById('pnlBody').innerHTML) showDefaultDetails();
+}
+function showDefaultDetails() {
+  document.getElementById('pnlBody').innerHTML = `<div style="color:var(--muted)">
+    Hover or click a control in the ${state.section === 'editor' ? 'editor' : state.section === 'messages' ? 'messages list' : 'trace view'} — its explanation appears here.
+    This <b>Details</b> panel replaces balloon tooltips and doubles as a learning guide. Drag its left edge to resize.</div>`;
+}
+// Called by the embedded tools (via the injected help bridge) to surface help
+// in the Details panel. `key` is the editor's HELP key ('' for a raw trace
+// data-tip). A studio-side WS_CONTENT rewrite wins over the tool's own text;
+// the tool passes its own text + diagram as the fallback.
+window.__wsHelp = function (key, fallbackBody, diagramSvg, deliberate) {
+  // Opening the panel is a deliberate act: a click on a help control, not the
+  // pointer happening to pass over something. Merely hovering refreshes the
+  // panel when it is already open and is ignored when it is not.
+  if (state.panelHeld) { if (deliberate) nudgePanelHold(); return; }
+  if (state.panelCollapsed) {
+    if (!deliberate) return;
+    state.panelCollapsed = false; renderPanel(); savePrefs();
+  }
+  const c = key && WS_CONTENT[key];
+  const title = key ? String(key).replace(/\./g, ' › ').replace(/_/g, ' ') : '';
+  const lead = c ? c.lead : '';
+  const body = c ? c.body : (fallbackBody || '');
+  const ex = c && c.ex ? c.ex : '';
+  const opts = c && Array.isArray(c.opts) ? c.opts : null;   // [{k, v}] — values/options
+  const steps = c && Array.isArray(c.steps) ? c.steps : null; // ["...", ...] — numbered
+  // A clean studio diagram wins over the embedded tool's cramped one.
+  const dg = studioDiagram(key) || diagramSvg || '';
+  // `extra` = rich trusted HTML (e.g. the interactive resolution playground),
+  // rendered LAST — all worked examples live at the END of Details.
+  const extra = c && c.extra ? (typeof c.extra === 'function' ? c.extra() : c.extra) : '';
+  const el = document.getElementById('pnlBody');
+  el.innerHTML =
+    `${title ? `<h4>${esc(title)}</h4>` : ''}` +
+    `${lead ? `<div class="ws-lead">${esc(lead)}</div>` : ''}` +
+    `<div class="ws-help-body">${esc(body)}</div>` +
+    `${opts ? `<div class="ws-cap">Options</div><div class="ws-opts">${opts.map((o) => `<div class="ws-opt"><code>${esc(o.k)}</code><span>${esc(o.v)}</span></div>`).join('')}</div>` : ''}` +
+    `${steps ? `<div class="ws-cap">Steps</div><ol class="ws-steps">${steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>` : ''}` +
+    `${ex ? `<div class="ws-ex-cap">Example</div><pre class="ws-ex">${esc(ex)}</pre>` : ''}` +
+    `${dg ? `<div class="ws-diagram-cap">How it flows</div><div class="ws-help-diagram">${dg}</div>` : ''}` +
+    `${extra ? `<div class="ws-cap">Examples — try each config (click to replay)</div><div class="ws-play">${extra}</div>` : ''}`;
+  // Click a playground card to replay its per-phase animation (interactivity).
+  el.querySelectorAll('.ws-play-card').forEach((card) => {
+    card.addEventListener('click', () => {
+      card.classList.add('replay');
+      void card.offsetWidth; // force reflow so the animation restarts
+      card.classList.remove('replay');
+    });
+  });
+};
+
+// ── Shared Trace ↔ Editor hints ──────────────────────────────────────────
+// The Trace view shows the SAME polished WS_CONTENT hints as the editor. The
+// trace-viewer marks its cards with a key label (a .step-chip-key /
+// .context-chip-key, or the chip's own text). We map that label to a WS_CONTENT
+// concept here — studio-side only; trace-viewer.html is never touched. Anything
+// without a shared entry falls back to the trace-viewer's own tip text.
+const TRACE_KEY_MAP = {
+  subagent: 'step.subagent',
+  spec_check: 'step.spec_check',
+  spec_authoring: 'step.spec_authoring',
+  model: 'step.model',
+  carry_forward: 'step.carry_forward',
+  structural: 'gate.structural', 'gate.structural': 'gate.structural',
+  semantic: 'gate.semantic', 'gate.semantic': 'gate.semantic',
+  human: 'gate.human', 'gate.human': 'gate.human',
+  allow_partial_step_complete: 'gate.allow_partial_step_complete',
+  'gate.allow_partial_step_complete': 'gate.allow_partial_step_complete',
+  'gate retries': 'gate.max_gate_retries',
+  'step retries': 'gate.max_step_retries',
+  // Trace-only concepts (their WS_CONTENT entries live under the 'trace.' prefix,
+  // added in the trace-concepts sweep):
+  invocation: 'trace.invocation', 'gate retry': 'trace.retry', 'step retry': 'trace.retry',
+  'branch retry': 'trace.retry', 'tool call': 'trace.tool_call', 'loop phase': 'trace.loop_phase',
+  'resolved inputs': 'input.path', 'resolved outputs': 'output.path', param_bindings: 'step.param_bindings',
+  // Editor OPTION toggles ("+ loop_back", "+ planning" … / "loop_back", "planning"
+  // when on): let the author READ what an option does BEFORE enabling it.
+  loop_back: 'step.loop_back',
+  routes: 'step.routes',
+  delegate: 'step.delegate_to',
+  planning: 'step.type',
+  parallel: 'step.parallel',
+  parallel_key: 'step.parallel_key',
+  // F7: the trace outputs "from child: <src>" io-tag + the editor's handoff row.
+  'from child': 'output.from_delegated',
+  from_delegated: 'output.from_delegated',
+};
+function traceKeyFor(label) {
+  if (!label) return '';
+  let l = String(label).trim().toLowerCase().replace(/\s+/g, ' ');
+  l = l.replace(/^\+\s*/, ''); // "+ loop_back" (an off toggle) → "loop_back"
+  l = l.split(':')[0].trim(); // "spec_authoring: persist" → "spec_authoring"; "delegate: wf" → "delegate"
+  if (TRACE_KEY_MAP[l]) return TRACE_KEY_MAP[l];
+  if (WS_CONTENT[l]) return l; // already an editor key (e.g. "gate.structural")
+  return '';
+}
+// Called by the injected trace bridge on hover of a [data-tip] card.
+window.__wsTraceHelp = function (rawLabel, tip, deliberate) {
+  if (state.panelHeld) { if (deliberate) nudgePanelHold(); return; }
+  if (state.panelCollapsed && !deliberate) return;
+  const key = traceKeyFor(rawLabel);
+  if (key && WS_CONTENT[key]) {
+    window.__wsHelp(key, tip || '', '', deliberate); // shared polished hint (+ example + animation)
+    return;
+  }
+  // No shared entry — show the trace-viewer's own tip, titled by a short label.
+  let t = rawLabel ? String(rawLabel).trim() : '';
+  if (t.length > 34) t = '';
+  window.__wsHelp(t, tip || '', '');
+};
+
+// Studio-side educational content — rewritten for a newcomer (what it does /
+// how to set it / options / how it affects the run), engine-accurate (no
+// exaggerated enforcement claims — the workflow-learn doc-drift lesson,
+// 2026-07-12). Keyed by the embedded editor's HELP keys; anything not here
+// falls back to the editor's own HELP text. The animated flow diagram still
+// comes from the editor's svg* illustrations. (Exemplar set — the full ~60-key
+// rewrite is progressive; see notes/open-questions.md.)
+const WS_CONTENT = {
+  // ── Workflow-level ──
+  'workflow.name': { lead: 'The workflow’s identifier.', body: 'Lowercase kebab-case, e.g. "add-language". It MUST match the folder name under my_workflows/ — the engine checks this when it loads the file. You use this name everywhere the workflow is referenced: to run it (/riglane-run-workflow <name>), to call it from another workflow (delegate_to), and in the trace.' },
+  'workflow.version': { lead: 'A whole number, starts at 1.', body: 'Bump it when you make a structural change to the workflow. It is informational — it does not gate anything — but it lets you and the trace tell versions apart over time.' },
+  'workflow.description': { lead: 'One or two sentences on what this workflow does.', body: 'Shown in listings and the trace. Write it for a teammate who has never seen the workflow: what it accomplishes and when you would run it.' },
+  'context.carry_forward': { lead: 'Whether steps see earlier steps’ summaries.', body: 'none (default): each step starts clean, seeing only what you feed it via inputs. summary: the engine passes a short summary of every finished step into the next step’s prompt, so later steps have context without you wiring inputs. A single step can override this with its own carry_forward.' },
+  'parallel_spawn_delay_ms': { lead: 'Workflow-wide delay between parallel spawns.', body: 'The default gap (in ms) the engine waits between starting parallel branches, so the first one can warm the prompt cache before the rest launch (big cost saving on large prompts). A step can override it. 3000–5000 is typical; leave empty for no delay.' },
+
+  // ── Params ──
+  'param.name': {
+    lead: 'A value you pass in when the workflow runs.',
+    body: 'Declare it once here, then reference it anywhere as {name} — in a step goal, an input/output path, or the params handed to a delegated workflow. The engine substitutes the value at runtime. Names are lowercase snake_case (e.g. env). run_id (and, inside a loop, iteration) are provided automatically — never declare those.',
+    opts: [
+      { k: '{name} in a goal', v: 'the value is pasted into the prompt text.' },
+      { k: '{name} in a path', v: 'builds a concrete file path — see Output path for the null rule.' },
+      { k: 'unset + no default', v: 'in an OUTPUT path → "" (path stays concrete); in a goal → left as text.' },
+    ],
+    steps: [
+      'Add the param here: name (+ description, required, default).',
+      'Write {name} wherever you need the value — goal, path, delegate params.',
+      'Run with name=<value>, or rely on its default.',
+    ],
+    ex: 'params:\n  - name: env\n    description: which environment this run targets\n    default: dev\nsteps:\n  - name: build\n    goal: "Build the report for {env}."\n    outputs:\n      - path: "data/{run_id}-{env}-report.json"',
+  },
+  'param.description': { lead: 'What this parameter is for.', body: 'Explain what the user should pass and what it affects. Shown when the workflow is launched — write it for someone who has never run this workflow.' },
+  'param.required': { lead: 'Must the user supply a value?', body: 'ON: running without it is an error — unless a default is set. OFF: it is optional; it resolves to its default, or (with no default) to nothing — which in an output path means "" (the segment collapses).' },
+  'param.default': {
+    lead: 'The value used when the user gives none.',
+    body: 'This is the RIGHT way to give an optional param a fallback. If a param can be unset and you leave NO default, then {param} in an output path resolves to "" — concrete (the folder segment collapses, or a filename gets a gap), but maybe not what you meant. Set a default when you want a real fallback value. A default also makes a "required" param effectively optional, so the two are mutually exclusive in the editor.',
+    ex: 'params:\n  - name: env\n    default: dev   # unset run → env = "dev", not ""',
+  },
+
+  // ── Gates ──
+  'gate.structural': { lead: 'Automatic output check — no AI.', body: 'After the step, the engine verifies the declared outputs: that each file exists, was actually written during this step (write_proof), and matches its schema (struct). Fast, free, and on by default. It only checks that outputs are well-formed — not whether the content is any good. For that, add the semantic gate.' },
+  'gate.semantic': { lead: 'AI quality check.', body: 'After the structural check, an LLM reads the step’s outputs and judges whether they actually meet the goal (complete, correct, coherent). Costs one extra model call. Worth it when quality matters and nothing downstream would catch a mistake; skip it when the schema check is enough.' },
+  'gate.human': { lead: 'Pause for your approval.', body: 'The orchestrator shows you the outputs and waits. Approve → the run continues. Reject → the step runs again with your feedback. Use it for critical or irreversible steps. Nothing proceeds until you say so. It can also be CONDITIONAL — human: {script: "<command>"} — where the engine runs the command at gate time (after the outputs exist) and it prints {"human": true|false}: the script decides, per run, whether this step needs your approval at all.' },
+  'gate.max_gate_retries': { lead: 'How many in-place fix attempts.', body: 'When the structural check fails, the SAME worker keeps its context and tries to fix the problem, using the failure details — up to this many times. This is the cheapest kind of retry. Default 5.' },
+  'gate.max_step_retries': { lead: 'How many fresh restarts.', body: 'If the in-place fixes run out, the orchestrator starts the step over with a BRAND-NEW worker (clean context + notes on what failed) — up to this many times. If these also run out, the workflow stops and tells you. Default 3.' },
+  'gate.allow_partial_step_complete': { lead: 'Allow a parallel step to finish with some branches failed.', body: 'OFF (default): every parallel branch must pass or the step blocks. ON: the step may complete with the branches that succeeded. (If ALL branches fail, it always blocks — no override.) Only relevant for parallel steps.' },
+  'step.gate.allow_partial_step_complete': { lead: 'Per-step override for partial parallel completion.', body: 'Same meaning as the workflow-level setting, but for this step only. OFF blocks unless every branch passes; ON lets succeeded branches through. All-failed always blocks.' },
+  'step.gate.retries_override': { lead: 'Override the retry budgets for THIS step only.', body: 'These inputs REPLACE the workflow-level retry defaults, just for this step. Empty (—) means inherit the workflow default (gate retries 5, step retries 3). Set a number to override — e.g. give a flaky step more in-place gate retries, or give a step where a second fresh attempt is pointless just 1 step retry. This is the per-step counterpart to the workflow-level "Gate defaults".', ex: 'steps:\n  - name: touchy-step\n    gate:\n      max_gate_retries: 8   # self-corrects well → allow more\n      max_step_retries: 1   # a fresh restart rarely helps here' },
+
+  // ── Tools ──
+  'tools': {
+    lead: 'Extra tools this workflow’s steps can call.',
+    body: 'Declare tools once at the workflow level; every step gets them by default, and a step can narrow that with its own tools list. Two kinds, plus the per-step filter:',
+    opts: [
+      { k: 'script', v: 'a command the engine runs — deterministic work (parse/format/validate) or things a plain agent can’t do (binary files, niche libraries).' },
+      { k: 'mcp', v: 'an external MCP server that must be running; you list the tool names it provides.' },
+      { k: 'step tools: (absent)', v: 'the step sees ALL workflow tools (default).' },
+      { k: 'step tools: []', v: 'the step sees NONE (only built-in Read/Write/Edit/Bash/Glob/Grep).' },
+      { k: 'step tools: [a, b]', v: 'the step sees exactly those.' },
+    ],
+  },
+  'tool.name': { lead: 'How the tool is called.', body: 'Lowercase with underscores, no hyphens (e.g. lint_check). The subagent calls it by this name during the step.' },
+  'tool.type': { lead: 'script or mcp.', body: 'script = a shell command the engine runs (you provide the command + argument schema). mcp = a separate MCP server the host must have connected (you list the tool names it provides).' },
+  'tool.command': { lead: 'The command to run (script tools).', body: 'Executed verbatim from the PROJECT ROOT — use the full path, e.g. "python .riglane/workflows/templates/my_workflows/<wf>/scripts/x.py". Arguments arrive both as --key=value flags and as JSON in the WORKFLOW_TOOL_ARGS env var. {param} placeholders are NOT substituted here.' },
+  'tool.description': { lead: 'What the tool does.', body: 'Shown to the subagent so it knows when to reach for the tool. Be concrete about inputs and output.' },
+  'tool.input_schema': { lead: 'JSON Schema for the tool’s arguments.', body: 'Standard JSON Schema (type: object, required, properties). The engine validates calls against it before running the command, so bad arguments fail early with a clear message.' },
+  'tool.required': { lead: 'Block the workflow if this MCP tool is missing?', body: 'ON (default): if the MCP server isn’t available, workflow_init refuses to start. OFF: the workflow runs without it (the step must cope with its absence).' },
+  'tool.expected_tools': { lead: 'The MCP server’s specific tool names.', body: 'Comma-separated. Needed so the engine can whitelist them for a subagent and track their use — especially on hosts that deliver MCP calls without a server prefix. Declare these for any required MCP tool you want tracked.' },
+  'tool.server_config': { lead: 'Legacy MCP server config (JSON).', body: 'Optional connection details for older setups. Most projects register MCP servers in the host config instead and leave this empty.' },
+
+  // ── Step: identity & execution ──
+  'step.name': { lead: 'The step’s identifier.', body: 'Lowercase kebab-case, unique within the workflow. Used as the key in the manifest/trace and (on Claude Code) for the per-step subagent file. Steps always run in the order listed.' },
+  'step.goal': { lead: 'What this step should accomplish.', body: 'The prompt the worker receives — the single most important field. Say WHAT to produce, not where (paths live in outputs). A good test: can you state the goal in one sentence without "and"? If not, it may be two steps. {param} placeholders are substituted in.', ex: 'goal: >\n  Read {source} and extract every behavioral rule\n  into data/specs.json (one object per rule).' },
+  'step.subagent': { lead: 'Who runs this step.', body: 'ON (default): an isolated subagent runs it, with a fresh context and full gate validation + retries — right for real work (code changes, analysis, anything worth checking). OFF (inline): the orchestrator does it directly in its own session — no spawn cost and no gate hook, though declared outputs are still checked once at the end. Use inline for cheap synthesis/reporting.', ex: '- name: implement      # heavy work → subagent\n  subagent: true\n- name: summarize       # cheap read-and-write\n  subagent: false       # runs inline' },
+  'step.model': { lead: 'Which model tier — as a MODE, not a name.', body: 'inherit = same as the orchestrator; auto (default) = the orchestrator picks a fitting tier itself; lightest = cheapest/fastest; strongest = most capable. You never name a specific model — Riglane maps the mode to whatever the host offers. Pick lightest for mechanical steps, strongest for hard reasoning, auto when unsure.', ex: '- name: extract-json\n  model: lightest      # mechanical → cheap tier\n- name: refactor-core\n  model: strongest     # hard reasoning' },
+  'step.tools': { lead: 'Which workflow tools this step may use.', body: 'Leave EMPTY (absent) = the step sees ALL workflow tools (the default). An explicit empty list = NONE (only built-in Read/Write/Edit/Bash/Glob/Grep). A list like [lint_check] = only those. Narrow it to keep a step focused and its trace clean.' },
+  'step.spec_check': { lead: 'Make this step respect behavioral specs.', body: 'OFF by default. ON lets the step search and read the project’s specs, adds guidance at the start, and makes the semantic gate check the changes for spec compliance. Turn it on for steps that MODIFY the project, so the work honors the recorded rules.' },
+  'step.spec_authoring': { lead: 'Let this step WRITE specs.', body: 'off (absent): no spec writing. persist: the step can create/update specs (spec files under .riglane/specs are auto-declared as outputs). validate: a dry run — it previews spec changes but writes nothing. Use persist only on steps whose job is authoring specs.' },
+  'step.carry_forward': { lead: 'Per-step context carry-forward.', body: 'inherit (default): follow the workflow’s context setting. ON: force prior-step summaries INTO this step. OFF: force a clean context even if the workflow carries summaries. Use ON for a synthesis step, OFF to keep a focused step from being distracted.' },
+  'step.param_bindings': { lead: 'Send a value OUT of this step into a param.', body: 'Format: my_param: "data/out.json::field.path". After the step passes, the engine reads that field from the output file and stores it in the named param, so later steps can use {my_param}. This is how one step’s result feeds another. (Opposite of a delegation’s params:, which pass values INTO a child.)', ex: 'param_bindings:\n  reviewer: "data/triage.json::assignee"\n# a later step can now write {reviewer} in its goal' },
+
+  // ── Step: parallel ──
+  'step.parallel': {
+    lead: 'Run this step once per item — all at the same time.',
+    body: 'Turns one step into N isolated branches, one per item in a list, running in parallel. Each branch is its own subagent with its own context and its own output folder (_branch_N/, added by the engine — never write _branch_ yourself). When every branch finishes, the engine MERGES their outputs back into one place. Worth it when the items are independent and there are several of them; for 1–2 items, or when a later item needs an earlier one’s result, a plain sequential step is simpler. You MUST set parallel_key to say what to iterate over.',
+    opts: [
+      { k: 'parallel_key', v: 'REQUIRED — the list to fan out over (see its help).' },
+      { k: 'output path', v: 'give each branch a distinct path with {parallel_key.<field>} (see parallel_key).' },
+      { k: 'parallel_spawn_delay_ms', v: 'stagger spawns so the first warms the prompt cache.' },
+      { k: 'gate.allow_partial_step_complete', v: 'let the step finish if some branches fail.' },
+    ],
+    ex: '- name: process-items\n  parallel: true\n  parallel_key: "discovery.items[*]"\n  outputs:\n    - path: "data/{run_id}-{parallel_key.name}-result.json"',
+  },
+  'step.parallel_key': {
+    lead: 'The list a parallel step fans out over — and how each branch names its output.',
+    body: 'It does two things. FIRST it points at an array in a prior step’s JSON output — one branch per element (JSONPath-like: discovery.items[*], or a filter like discovery.domains[status=pending]). SECOND, its fields NAME each branch’s output path so branches don’t overwrite each other. That naming is where the variety lives — an output path is built from these pieces:',
+    opts: [
+      { k: '{parallel_key.<field>}', v: 'THIS branch’s value for <field> — the per-branch IDENTITY. The usual way to give each branch a distinct path. Fails loud if the field is missing or empty.' },
+      { k: '{parallel_key}', v: 'the whole item — only when it is a plain scalar (string/number), not an object.' },
+      { k: '{}', v: 'the branch-index slot → _branch_0, _branch_1 … scaffolding the engine strips at merge. Use when branches have no natural key.' },
+      { k: '{param}', v: 'a workflow param — ONE value shared by every branch (null → ""). NEVER use this for identity: every branch would resolve to the same path and collide.' },
+      { k: '* / **', v: 'an author glob — the branch invents the filenames itself; the engine merges them flat into one folder.' },
+    ],
+    steps: [
+      'Point parallel_key at a prior step’s array (e.g. discovery.items[*]).',
+      'In the output path, put {parallel_key.<field>} wherever branches must differ.',
+      'Each branch resolves its OWN concrete path and runs inside data/…/_branch_N/.',
+      'When all finish, the engine MERGES: it moves each branch’s file up to the path WITHOUT _branch_N. (Two branches resolving to the same concrete path is a collision the engine rejects — that is what {parallel_key.<field>} prevents.)',
+    ],
+    extra: parallelPlayHTML, // interactive per-config examples at the END of Details
+  },
+  'step.parallel_spawn_delay_ms': { lead: 'Delay between branch spawns (this step).', body: 'Milliseconds to wait between launching branches so the first can warm the prompt cache before the rest start (a big cost saving on large prompts). Overrides the workflow-level default. 3000–5000 helps when there are 5+ branches with large prompts; leave empty for none.' },
+
+  // ── Step: delegation ──
+  'step.delegate_to': {
+    lead: 'Run ANOTHER workflow in place of this step.',
+    body: 'Names a workflow to run here — it gets its OWN run, gate config, and trace. Great for reusing a proven workflow instead of re-authoring its steps. The step must be inline (subagent: false). One level deep only — a delegated workflow should not itself delegate.',
+    opts: [
+      { k: 'params', v: 'values passed INTO the child (may use {param} from the parent).' },
+      { k: 'param_bindings', v: 'how you read results BACK OUT of the child.' },
+      { k: 'subagent: false', v: 'required — delegation is always orchestrator-driven.' },
+    ],
+    steps: [
+      'The orchestrator runs the named workflow as its own run (own gate + trace).',
+      'params flow in; the child runs to completion.',
+      'Back in the parent, param_bindings can read the child’s outputs into params for later steps.',
+    ],
+    ex: '- name: audit\n  delegate_to: spec-audit\n  subagent: false\n  params: { scope: "{scope}" }',
+  },
+  'step.delegate_params': { lead: 'Values passed INTO the delegated workflow.', body: 'Key/value pairs that become the child workflow’s parameters. Values may use {param} from the parent. (To get results BACK out of the child, use param_bindings.)' },
+
+  // ── Step: planning ──
+  'step.type': {
+    lead: 'A planning step — the orchestrator designs this step’s substeps at runtime.',
+    body: 'Most steps have their work fixed up front. A PLANNING step is different: instead of doing the work itself, the orchestrator DRAFTS a small child workflow on the spot — tailored to this run’s input — then runs it. Reach for it only when the substeps genuinely depend on the input and you cannot predict them in advance (e.g. "implement {feature}" where the feature varies run to run). If you CAN list the steps up front, do that — it is simpler and cheaper. A planning step declares no outputs and no step-level gate (each drafted substep carries its own).',
+    opts: [
+      { k: 'max_substeps', v: 'the biggest plan the orchestrator may draft (default 7).' },
+      { k: 'max_plan_attempts', v: 'how many drafts it may try before giving up (default 3).' },
+      { k: 'allow_parallel', v: 'may the drafted plan use parallel steps? (default off).' },
+      { k: 'allow_delegation', v: 'may a drafted substep delegate to another workflow? (default off).' },
+    ],
+    steps: [
+      'The step begins → the orchestrator reads the goal (and notes from past runs).',
+      'It DRAFTS a child workflow, then VALIDATES it — re-drafting up to max_plan_attempts if invalid.',
+      'It RUNS each drafted substep — each gated exactly like a normal step.',
+      'It FINALIZES; the last substep’s outputs are promoted so later steps can use them. (Can’t produce a valid plan → the step blocks and surfaces to you.)',
+    ],
+    ex: '- name: implement-feature\n  type: planning\n  goal: "Design and carry out the steps to implement {feature}."\n  max_substeps: 5\n  # no outputs / no step gate — the drafted substeps carry their own',
+  },
+  'step.max_substeps': { lead: 'Cap on the drafted plan’s size (planning).', body: 'The most steps the orchestrator’s generated child workflow may contain. Default 7. Keeps a drafted plan small, focused, and cheap to run.' },
+  'step.max_plan_attempts': { lead: 'How many drafts before giving up (planning).', body: 'The orchestrator may re-draft the plan until it validates, up to this many times. Default 3. If it still can’t produce a valid plan, the step blocks and surfaces the failure to you — it never runs a broken plan.' },
+  'step.allow_parallel': { lead: 'May the drafted plan use parallel steps? (planning)', body: 'OFF by default — keeps generated plans simple and linear. Turn ON only if fan-out inside the drafted plan is genuinely needed.' },
+  'step.allow_delegation': { lead: 'May the drafted plan delegate? (planning)', body: 'OFF by default — this preserves the one-level-deep delegation rule (a drafted plan handing off to a workflow that also delegates would nest too far). Turn ON only if a generated substep must reuse another workflow.' },
+
+  // ── Step: loop_back ──
+  'step.loop_back': {
+    lead: 'Repeat an earlier slice of the workflow until a condition clears.',
+    body: 'Declared on the LAST step of a cycle. It points back to an earlier step (or itself) and repeats that slice until a condition says stop. Repetition is ENGINE-OWNED: the engine evaluates the condition, resets the looped steps, and moves the cursor — you only supply the condition (when) and a hard max_iterations ceiling. It runs only AFTER the step’s gate passes (navigation, not a quality gate). Loops go BACKWARD; for forward branching use routes.',
+    opts: [
+      { k: 'to', v: 'this step or an EARLIER one — the slice [to .. here] repeats.' },
+      { k: 'max_iterations', v: 'hard cap (literal integer ≥ 1); on the limit it just proceeds.' },
+      { k: 'when', v: 'the loop-vs-stop condition (script / semantic / human).' },
+    ],
+    steps: [
+      'The step’s gate passes → the engine evaluates when.',
+      'Loop → it resets [to .. here] to pending and re-runs from "to".',
+      'Proceed (or max_iterations reached) → the workflow moves on.',
+    ],
+    ex: 'loop_back:\n  to: run-scenario\n  max_iterations: 20\n  when:\n    script: "python .riglane/.../check_remaining.py"   # {"loop": true|false}',
+  },
+  'step.loop_back.to': { lead: 'Where the loop jumps back to.', body: 'The name of this step or an EARLIER one. The engine resets that step and everything down to here, then re-runs. It cannot point forward.' },
+  'step.loop_back.max_iterations': { lead: 'Hard limit on repeats.', body: 'A whole number ≥ 1 — the engine never loops more than this, no matter what the condition says (anti-runaway). Must be a literal number, not a {param}. When the limit is hit, the workflow simply proceeds.' },
+  'step.loop_back.when': {
+    lead: 'The condition that decides loop vs stop.',
+    body: 'At least one decider. If several are set they must ALL say "loop" to loop; the first "proceed" wins (evaluated cheap → expensive: script → semantic → human). It is navigation, not a quality gate.',
+    opts: [
+      { k: 'script', v: 'a command that prints {"loop": true|false} (runs from the project root).' },
+      { k: 'semantic', v: 'a yes/no question an LLM answers against the step’s outputs.' },
+      { k: 'human', v: 'you decide; the orchestrator relays the question.' },
+    ],
+    ex: 'when:\n  script: "python .riglane/.../check_remaining.py"',
+  },
+
+  // ── Step: routes ──
+  'step.routes': {
+    lead: 'After this step, branch forward down ONE of several named paths.',
+    body: 'The engine picks one named route (or none) from a condition, runs that route’s steps in line, then continues with the normal flow. Routes are authored up front (unlike planning, which drafts steps at runtime). The FORWARD counterpart to loop_back.',
+    opts: [
+      { k: 'when', v: 'how the route is chosen (script / semantic / human) → a route id or "proceed".' },
+      { k: 'define', v: 'the named routes, each with its own list of steps.' },
+      { k: '"proceed"', v: 'reserved — take no route and continue.' },
+    ],
+    steps: [
+      'This step’s gate passes → the engine evaluates when.',
+      'A route id → it injects that route’s steps and runs them in order.',
+      '"proceed" → no route; the workflow continues normally.',
+      'When the route’s last step finishes, control returns to the step after this one.',
+    ],
+    ex: 'routes:\n  when: { semantic: "hotfix or full review?" }\n  define:\n    - id: hotfix\n      steps: [ { name: patch, goal: "..." } ]\n    - id: full_review\n      steps: [ { name: deep-dive, goal: "..." } ]',
+  },
+  'step.routes.when': {
+    lead: 'How the route is chosen — yields a route id or "proceed".',
+    body: 'At least one decider. With a human present, the user decides (script/semantic become advice). Without human, if BOTH script and semantic are set they must AGREE, otherwise it proceeds (takes no route).',
+    opts: [
+      { k: 'script', v: 'prints {"route": "<id>"|"proceed"} (runs from the project root).' },
+      { k: 'semantic', v: 'an LLM picks a route id or "proceed".' },
+      { k: 'human', v: 'you pick — the final authority.' },
+    ],
+  },
+  'step.routes.define': { lead: 'The named routes and their steps.', body: 'Each route has a unique id and its own list of steps that run when it is chosen. Route step names are unique across the whole workflow, just like top-level steps.', ex: 'routes:\n  when: { semantic: "hotfix or full review?" }\n  define:\n    - id: hotfix\n      steps: [ { name: patch, goal: "..." } ]\n    - id: full_review\n      steps: [ { name: deep-dive, goal: "..." } ]' },
+  'step.routes.id': { lead: 'A route’s name.', body: 'Globally unique within the workflow; cannot be "proceed" (reserved). This is the value a decider returns to select the route.' },
+
+  // ── Inputs ──
+  'input.path': {
+    lead: 'A file to put in front of the step.',
+    body: 'Inputs are read-oriented, so a glob that matches MANY files is normal and welcome — data/report_*.json feeds every match. That is the opposite of an OUTPUT path, which must name ONE concrete file. Relative paths resolve inside this run’s data folder; paths starting .riglane/ are project-root-relative. {param} placeholders and globs (*, **) both work. Note: inputs are NOT an access whitelist — the worker can read any project file anyway; declaring an input just surfaces it in the prompt (and lets you validate it with struct).',
+    opts: [
+      { k: 'data/plan.json', v: 'one concrete file.' },
+      { k: 'data/report_*.json', v: 'every match — multi-file input is fine here.' },
+      { k: 'data/{env}/*.md', v: '{param} + glob, both resolved at runtime.' },
+    ],
+    ex: 'inputs:\n  - path: data/report_*.json   # read the whole loop history\n    inject: reference',
+  },
+  'input.inject': { lead: 'How the file reaches the worker.', body: 'reference (default): only the path is mentioned; the worker reads it itself — best for large files. file: the full content is pasted into the prompt — use for small must-read files (a short config, a schema). file_if_exists: like file, but silently skipped if the file isn’t there — for optional context.', ex: 'inputs:\n  - path: data/plan.json\n    inject: reference      # large → read on demand\n  - path: rules.md\n    inject: file           # small → paste in' },
+  'input.struct': { lead: 'Validate this input before the step runs.', body: 'Optional. Names a struct schema (from the structs/ folder). If set, the engine checks the input file against it up front, so the step never starts on malformed data.' },
+
+  // ── Outputs ──
+  'output.path': {
+    lead: 'The ONE concrete file this step must produce.',
+    body: 'An output path names a single file the gate then verifies. So placeholders resolve to something CONCRETE — a null value never silently turns into a wildcard (that would hide a missing or mis-named file). Say WHERE here; the goal says WHAT. Relative paths land in this run’s isolated data folder (parallel-safe); .riglane/ paths are project-root-relative. One rule to remember: “{param} → its value or ""; want a wildcard? write * yourself.”',
+    opts: [
+      { k: '{param} = value', v: 'becomes the value (e.g. {env} → data/dev/…).' },
+      { k: '{param} = null / unset', v: '→ "" — a whole folder segment collapses; inside a name it leaves a gap. Still concrete.' },
+      { k: '{typo} undeclared', v: 'ERROR at load (riglane validate-workflow / workflow_validate). Declare it, or write a literal *.' },
+      { k: 'literal * / **', v: 'a real glob, kept as-is — the ONLY way to ask for a wildcard output.' },
+      { k: '{parallel_key.<field>} / {}', v: 'parallel-only; an error in a non-parallel output. (In parallel the engine also adds _branch_N/ — never write it.)' },
+    ],
+    steps: [
+      'Write the path, using {param} for the parts that vary.',
+      'Make sure every {param} is a DECLARED workflow param (else it fails at load).',
+      'Need a wildcard? Type * literally — don’t rely on an unset param to make one.',
+    ],
+    ex: 'params:\n  - name: variant        # declared → may be unset\nsteps:\n  - name: report\n    outputs:\n      - path: "data/{run_id}-{variant}-report.json"\n      # variant unset → data/<run_id>--report.json (concrete)\n      - path: "data/extras/*.md"   # explicit wildcard = many files',
+  },
+  'output.struct': {
+    lead: 'Validate the file’s CONTENT against a schema (one of 3 axes).',
+    body: 'The gate checks an output on three independent axes: it EXISTS (unless optional), it is FRESH (write_proof — written this step), and its content is VALID (struct — types, required fields, patterns, enums). struct names a schema from the structs/ folder. Always declare one for structured data; without it the gate only checks that the file exists.',
+    ex: 'outputs:\n  - path: data/report.json\n    struct: report      # → structs/report.schema.yaml',
+  },
+  'output.write_proof': {
+    lead: 'Prove the file was written in THIS step (freshness axis).',
+    body: 'Stops a worker from claiming success without actually writing, and stops a leftover file from a previous run from passing. The default matches the path shape — a plain path defaults to required, a glob to all_members_fresh.',
+    opts: [
+      { k: 'required', v: 'this exact file must be freshly written (default for a plain path).' },
+      { k: 'all_members_fresh', v: 'every glob match must be fresh (default for a glob).' },
+      { k: 'any_member', v: 'at least one glob match written.' },
+      { k: 'off', v: 'skip the freshness check — the file must still exist.' },
+    ],
+    ex: 'outputs:\n  - path: data/report.json\n    write_proof: required',
+  },
+  'output.optional': {
+    lead: 'This output may be absent (existence axis).',
+    body: 'OFF (default): a declared output MUST exist or the gate fails. ON: if the file isn’t produced, ALL checks are skipped — no failure. Use it for a conditional output, e.g. an issues report that appears only when there are issues. This is the proper way to say “maybe” — don’t reach for a wildcard to fake an absent file.',
+  },
+  'output.per_iteration': {
+    lead: 'Keep one file per loop pass.',
+    body: 'Only valid in a loop_back workflow. The engine inserts the 0-based pass counter into the name (data/report.json → data/report_0.json, report_1.json …) so passes don’t overwrite each other. Read the accumulated history back with a glob INPUT like data/report_*.json (globs are fine for inputs).',
+    ex: 'outputs:\n  - path: data/report.json\n    per_iteration: true   # → report_0.json, report_1.json, …',
+  },
+  'output.from_delegated': {
+    lead: 'Collect a FILE from the delegated child’s run (artifact handoff).',
+    body: 'Delegation steps only. A delegated workflow runs as its OWN run — its files live in its own run dir, whose name contains a dynamic run id, so a later parent step cannot declare them statically. from_delegated closes that gap: name the source path inside the CHILD’s run dir, and at step_complete the engine copies the matched file to this output’s path (a concrete parent-side destination). The handoff file then validates like any normal output (existence + struct), and later steps declare the STATIC parent path as a plain input. Never glob other runs or “hunt” for child files in the goal text — that reads a SIBLING run’s artifacts under parallel runs.',
+    opts: [
+      { k: '{param} in the source', v: 'resolves against the CHILD’s params — incl. its synthetic run_id (e.g. data/{run_id}-report.json).' },
+      { k: 'glob in the source', v: 'allowed, but must match EXACTLY ONE file at runtime — ambiguity fails the step.' },
+      { k: 'path (destination)', v: 'must be CONCRETE (no globs); the dynamic part belongs in from_delegated.' },
+      { k: 'optional', v: 'a missing source skips the entry instead of failing the step.' },
+      { k: 'scalars', v: 'single VALUES flow through param_bindings — from_delegated is for FILES.' },
+    ],
+    ex: '- name: run-audit\n  delegate_to: spec-audit\n  subagent: false\n  outputs:\n    - path: data/audit-report.json        # static parent-side\n      from_delegated: "data/{run_id}-audit-report.json"\n      struct: audit-report\n# later step:\n#   inputs: [ { path: data/audit-report.json } ]',
+  },
+
+  // ── Structs (schema authoring) ──
+  'struct.name': { lead: 'The schema’s name.', body: 'Must match its filename basename in structs/ (e.g. name "report" → structs/report.schema.yaml). Outputs/inputs reference it by this name.' },
+  'struct.description': { lead: 'What this schema represents.', body: 'A human-readable note on what the validated file holds. Recommended.' },
+  'struct.format': {
+    lead: 'What kind of file this schema validates.',
+    body: 'Pick json unless you are validating a Markdown document. The format decides what the gate can check.',
+    opts: [
+      { k: 'json', v: 'recommended for structured data — checks fields, types, patterns, enums, array items.' },
+      { k: 'yaml', v: 'presence checks only (required fields exist).' },
+      { k: 'markdown', v: 'frontmatter fields + required ## sections.' },
+      { k: 'text', v: 'file-level checks only (exists / size / name pattern).' },
+    ],
+  },
+  'struct.field': { lead: 'A required field’s path.', body: 'Dot/bracket path into the data, e.g. domain, or results[].spec_id for every item of an array. The gate fails if it’s missing.', ex: 'required_fields:\n  - { field: domain, type: string }\n  - { field: results[].status, type: string,\n      enum: [pass, fail] }' },
+  'struct.field_type': { lead: 'The field’s expected type.', body: 'string, integer, number, boolean, array, or object. The gate checks the value matches.' },
+  'struct.pattern': { lead: 'A regex the string must match.', body: 'For string fields — e.g. ^[A-Z]+-\\d{3}$ for an id. Great for catching typos in id-like fields.' },
+  'struct.enum': { lead: 'The allowed values.', body: 'Comma-separated list; the value must be one of them. Perfect for status-like fields (e.g. compliant, violation, partial) to catch typos.' },
+  'struct.min_items': { lead: 'Minimum array length.', body: 'For array fields — the gate fails if the array has fewer than this many items.' },
+  'struct.fm_field': { lead: 'A required frontmatter field (markdown).', body: 'The name of a YAML frontmatter key the document must have, e.g. spec_id.' },
+  'struct.fm_type': { lead: 'The frontmatter field’s type.', body: 'string, number, enum, list, or boolean. For enum, list the allowed values in Values.' },
+  'struct.fm_values': { lead: 'Allowed values for an enum frontmatter field.', body: 'Comma-separated; the frontmatter value must be one of them.' },
+  'struct.required_sections': { lead: 'Required ## headings (markdown).', body: 'Each entry is a top-level ## section the document must contain, e.g. "Rule Statement". Only ## (not ###) headings count.' },
+  'struct.file_exists': { lead: 'Require the file to exist.', body: 'On by default. The gate fails if the file is missing. (For a conditional output, use the output’s "optional" flag instead.)' },
+  'struct.min_size': { lead: 'Minimum file size in bytes.', body: 'The gate fails if the file is smaller — a quick guard against empty/stub output.' },
+  'struct.max_size': { lead: 'Maximum file size in bytes.', body: 'The gate fails if the file is larger — guards against runaway output.' },
+  'struct.name_pattern': { lead: 'A regex the filename must match.', body: 'Checked against the file’s basename, e.g. ^report-.*\\.json$.' },
+
+  // ── Agent Messages / run inbox concepts ──
+  'inbox.message': {
+    lead: 'A question a run is asking you, delivered outside the terminal.',
+    body: 'A human-gated step (or a loop/route human decider) with human_channel inbox|both posts a structured message into the run inbox. The engine validates its structure before storing, and the step cannot complete until a fresh answer is recorded — the approval is verified from disk, not taken on faith. Answer here, from an external program via the Local API, or in the terminal (the orchestrator records what it heard into the same store).',
+    opts: [
+      { k: 'accept', v: 'approve — the run continues.' },
+      { k: 'reject', v: 'refuse — the step is re-run with your words as feedback.' },
+      { k: 'respond', v: 'a free-text answer (or one of the offered choices).' },
+      { k: 'edit', v: 'return an edited version of what was proposed.' },
+    ],
+  },
+  'inbox.response': {
+    lead: 'The durable record of who answered, what, when, and through which channel.',
+    body: 'Every answer lands in the message file next to the question, stamped with a via field (terminal / web / api / webhook). A message answers exactly once — whichever channel answers first wins, and the others are withdrawn. The run is waiting inside a held engine call, so it continues the moment your answer is recorded; nothing times out while it waits.',
+  },
+
+  // ── Trace view concepts (surfaced in the Trace section via the shared bridge) ──
+  'trace.invocation': {
+    lead: 'One execution of a step by a subagent (or the orchestrator).',
+    body: 'A step card lists its invocation(s): each is one run — the messages exchanged, the tools called, files modified, the model, and the duration. A clean step has exactly one; a step that was retried shows several, each tagged by WHY (see retry). An inline step (subagent: false) shows an "orchestrator" invocation instead of a spawned subagent.',
+  },
+  'trace.retry': {
+    lead: 'Why a step ran more than once.',
+    body: 'When a step re-runs, the trace tags each attempt so you can see what happened.',
+    opts: [
+      { k: 'gate retry', v: 'the SAME subagent fixed the output in place (cheapest — keeps its context).' },
+      { k: 'step retry', v: 'a FRESH subagent restarted the step from clean context.' },
+      { k: 'branch retry', v: 'one parallel branch was re-spawned.' },
+    ],
+    ex: '# budgets: gate.max_gate_retries (in-place) then\n# gate.max_step_retries (fresh) — both exhausted → workflow halts',
+  },
+  'trace.tool_call': {
+    lead: 'A tool the subagent invoked during the step.',
+    body: 'The ledger lists each call in order. A declared script tool counts as used whether called as its MCP tool or run directly via the shell. "declared tool not called" is an advisory warning, not a gate failure.',
+    opts: [
+      { k: 'WF-TOOL', v: 'a declared workflow script tool.' },
+      { k: 'BASH', v: 'a raw shell command.' },
+      { k: 'MCP', v: 'an external MCP server tool.' },
+    ],
+  },
+  'trace.loop_phase': {
+    lead: 'Which pass of a loop_back cycle this card belongs to.',
+    body: 'When a step declares loop_back, the engine repeats the slice from its target down to it. The trace draws a divider per pass ("Begin Loop Back Phase N") and archives each pass’s cards, so you read the iterations in order. The pass counter is the {iteration} param (0-based); per_iteration outputs keep one file per pass.',
+  },
+};
+
+// Route the embedded tools' help into the Details panel instead of their own
+// balloon/modal.
+//
+// KEY POINT: the editor's HELP / HELP_DIAGRAMS are `const` at script top level,
+// so they are NOT window properties (cw.HELP is undefined) — the parent cannot
+// read them. But classic <script> tags in a document SHARE the top-level
+// lexical scope, so a script we INJECT into the iframe CAN see them and can
+// reassign the (function-declaration) `showHelp`. That injected bridge reroutes
+// showHelp → parent.__wsHelp, and routes trace-viewer [data-tip] hover → the
+// panel too. We also hide the tools' own balloon/hint chrome.
+/* ── Studio diagrams — clean, readable, vertical (fit the narrow panel), with
+   animated flow arrows. These REPLACE the embedded editor's cramped diagrams
+   for the concepts below (the old ones render broken/unreadable). Reuse the
+   .ws-help-diagram CSS classes (node-*, lbl, arrow + flow animation). */
+const DG = (function () {
+  const DEFS =
+    '<defs>' +
+    '<marker id="arrowHead" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--muted)"/></marker>' +
+    '<marker id="arrowGreen" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--green)"/></marker>' +
+    '<marker id="arrowRed" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--red)"/></marker>' +
+    '</defs>';
+  const box = (x, y, w, h, cls, label, lblCls) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="7" class="node ${cls}"/><text x="${x + w / 2}" y="${y + h / 2}" class="lbl ${lblCls || ''}">${label}</text>`;
+  const down = (x, y1, y2, cls) => `<line x1="${x}" y1="${y1}" x2="${x}" y2="${y2}" class="${cls || 'arrow'}"/>`;
+  const seg = (x1, y1, x2, y2, cls) => `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" class="${cls || 'arrow'}"/>`;
+  const svg = (w, h, inner) => `<svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">${DEFS}${inner}</svg>`;
+  function vflow(steps, w) {
+    w = w || 300; const bw = 210, bh = 34, gap = 24, x = (w - bw) / 2; let y = 6, inner = '';
+    steps.forEach((s, i) => { inner += box(x, y, bw, bh, s.cls, s.label, s.lbl); if (i < steps.length - 1) inner += down(w / 2, y + bh, y + bh + gap, s.arrow); y += bh + gap; });
+    return svg(w, y - gap + 6, inner);
+  }
+  // Like vflow, but each box is a .ws-phase that lights up in turn (looping) —
+  // the per-phase presentation. `sub` adds a small caption under a box.
+  function phases(steps, w) {
+    w = w || 300; const bw = 226, bh = 34, gap = 20, x = (w - bw) / 2;
+    const dur = 1.5, cyc = (steps.length * dur).toFixed(1); let y = 6, inner = '';
+    steps.forEach((s, i) => {
+      const subH = s.sub ? 15 : 0;
+      inner += `<g class="ws-phase" style="animation-duration:${cyc}s;animation-delay:${(i * dur).toFixed(2)}s">`
+        + box(x, y, bw, bh, s.cls, s.label, s.lbl)
+        + (s.sub ? `<text x="${w / 2}" y="${y + bh + 11}" class="lbl-sm">${s.sub}</text>` : '')
+        + '</g>';
+      const bottom = y + bh + subH;
+      if (i < steps.length - 1) inner += down(w / 2, bottom, bottom + gap, s.arrow);
+      y = bottom + gap;
+    });
+    return svg(w, y - gap + 6, inner);
+  }
+  return { DEFS, box, down, seg, svg, vflow, phases };
+})();
+const STUDIO_DIAGRAM_FNS = {
+  gatePipeline: () => DG.phases([
+    { label: 'Step finishes', cls: 'node-muted' },
+    { label: 'Structural — files/schema', cls: 'node-blue', lbl: 'lbl-blue' },
+    { label: 'Semantic — AI quality', cls: 'node-purple', lbl: 'lbl-purple' },
+    { label: 'Human — your approval', cls: 'node-amber', lbl: 'lbl-amber' },
+    { label: '✓ Proceed', cls: 'node-green', lbl: 'lbl-green' },
+  ]),
+  // ── Flagship: path/file resolution, params, output axes (per-phase) ──
+  pathResolution: () => DG.phases([
+    { label: '{param} → its value', cls: 'node-blue', lbl: 'lbl-blue', sub: 'declared param, value supplied' },
+    { label: '{param} = null → ""', cls: 'node-amber', lbl: 'lbl-amber', sub: 'dir segment collapses / filename gap' },
+    { label: '{typo} → LOAD ERROR', cls: 'node-red', lbl: 'lbl-red', sub: 'undeclared ≠ wildcard' },
+    { label: 'literal *  → kept', cls: 'node-purple', lbl: 'lbl-purple', sub: 'the only way to ask for a glob' },
+  ]),
+  paramsFlow: () => DG.phases([
+    { label: 'params: name + default', cls: 'node-muted', sub: 'declared once, at the top' },
+    { label: 'run supplies a value', cls: 'node-blue', lbl: 'lbl-blue', sub: 'or falls back to the default' },
+    { label: '{param} in goal / path', cls: 'node-accent', lbl: 'lbl-accent', sub: 'engine substitutes at runtime' },
+  ]),
+  outputAxes: () => DG.phases([
+    { label: 'exists?  ← optional', cls: 'node-blue', lbl: 'lbl-blue', sub: 'the file is there' },
+    { label: 'fresh?  ← write_proof', cls: 'node-amber', lbl: 'lbl-amber', sub: 'written in THIS step' },
+    { label: 'valid?  ← struct', cls: 'node-purple', lbl: 'lbl-purple', sub: 'matches the schema' },
+    { label: '✓ output accepted', cls: 'node-green', lbl: 'lbl-green' },
+  ]),
+  // parallel_key: fan-out → per-branch path resolve → isolated write → merge.
+  parallelResolve: () => DG.phases([
+    { label: 'parallel_key → items[ ]', cls: 'node-muted', sub: 'points at a prior step’s JSON array' },
+    { label: 'one branch per item', cls: 'node-blue', lbl: 'lbl-blue', sub: 'isolated, all run in parallel' },
+    { label: '{parallel_key.field} → path', cls: 'node-accent', lbl: 'lbl-accent', sub: 'each branch gets its OWN concrete path' },
+    { label: 'writes in _branch_N/', cls: 'node-purple', lbl: 'lbl-purple', sub: 'engine-added isolation folder' },
+    { label: 'merge → drop _branch_N', cls: 'node-green', lbl: 'lbl-green', sub: 'outputs land at the real path' },
+  ]),
+  planningFlow: () => DG.phases([
+    { label: 'planning step begins', cls: 'node-muted', sub: 'substeps NOT fixed up front' },
+    { label: 'orchestrator drafts a plan', cls: 'node-blue', lbl: 'lbl-blue', sub: 'a child workflow for THIS input' },
+    { label: 'validate the draft', cls: 'node-amber', lbl: 'lbl-amber', sub: 'retry up to max_plan_attempts' },
+    { label: 'run each substep', cls: 'node-purple', lbl: 'lbl-purple', sub: 'gated like normal steps' },
+    { label: 'finalize → outputs promoted', cls: 'node-green', lbl: 'lbl-green' },
+  ]),
+  delegationFlow: () => DG.phases([
+    { label: 'parent reaches the step', cls: 'node-muted', sub: 'subagent: false · delegate_to: <wf>' },
+    { label: 'params flow IN', cls: 'node-accent', lbl: 'lbl-accent', sub: 'parent values → child params' },
+    { label: 'child workflow runs', cls: 'node-blue', lbl: 'lbl-blue', sub: 'its OWN run · gate · trace' },
+    { label: 'param_bindings read OUT', cls: 'node-purple', lbl: 'lbl-purple', sub: 'child outputs → parent params' },
+    { label: 'parent continues', cls: 'node-green', lbl: 'lbl-green' },
+  ]),
+  retries: () => {
+    const w = 300, bw = 236, x = (w - bw) / 2; let y = 6, s = '';
+    s += DG.box(x, y, bw, 32, 'node-red', 'Structural gate fails', 'lbl-red'); y += 32;
+    s += DG.down(w / 2, y, y + 22); y += 22;
+    s += DG.box(x, y, bw, 46, 'node-blue', 'Same worker fixes in place', 'lbl-blue') + `<text x="${w / 2}" y="${y + 40}" class="lbl-sm">× up to max_gate_retries</text>`; y += 46;
+    s += DG.down(w / 2, y, y + 22); y += 22;
+    s += DG.box(x, y, bw, 46, 'node-purple', 'Fresh worker restarts', 'lbl-purple') + `<text x="${w / 2}" y="${y + 40}" class="lbl-sm">× up to max_step_retries</text>`; y += 46;
+    s += DG.down(w / 2, y, y + 22); y += 22;
+    s += DG.box(x, y, bw, 32, 'node-muted', 'Still failing → STOP', ''); y += 32;
+    return DG.svg(w, y + 6, s);
+  },
+  subagent: () => {
+    const w = 300; let s = '';
+    s += DG.box(40, 6, 220, 32, 'node-accent', 'Orchestrator', 'lbl-accent');
+    s += DG.seg(90, 38, 90, 62); s += DG.seg(210, 38, 210, 62);
+    s += DG.box(12, 62, 150, 46, 'node-blue', 'subagent: true', 'lbl-blue') + `<text x="87" y="98" class="lbl-sm">isolated · gated</text>`;
+    s += DG.box(176, 62, 112, 46, 'node-amber', 'inline', 'lbl-amber') + `<text x="232" y="98" class="lbl-sm">same session</text>`;
+    return DG.svg(w, 120, s);
+  },
+  loopBack: () => {
+    const w = 300, bw = 150, x = (w - bw) / 2; let y = 30, s = '';
+    s += `<text x="40" y="20" class="lbl-sm" text-anchor="start">loops while when = true</text>`;
+    s += DG.box(x, y, bw, 32, 'node-blue', 'run-scenario', 'lbl-blue'); const topY = y; y += 32;
+    s += DG.down(w / 2, y, y + 20); y += 20;
+    s += DG.box(x, y, bw, 32, 'node-purple', 'record-result', 'lbl-purple');
+    s += DG.seg(x, y + 16, 34, y + 16, 'arrow'); s += DG.seg(34, y + 16, 34, topY + 16, 'arrow'); s += DG.seg(34, topY + 16, x, topY + 16, 'arrow');
+    y += 32; s += DG.down(w / 2, y, y + 20, 'arrow-green'); y += 20;
+    s += DG.box(x, y, bw, 30, 'node-green', '✓ proceed', 'lbl-green'); y += 30;
+    return DG.svg(w, y + 6, s);
+  },
+  paramBindings: () => DG.vflow([
+    { label: 'Step writes data/out.json', cls: 'node-blue' },
+    { label: '::field  →  {param}', cls: 'node-accent' },
+    { label: 'Later step uses {param}', cls: 'node-green' },
+  ]),
+  inject: () => {
+    const w = 300, bw = 268, x = (w - bw) / 2; let y = 6, s = '';
+    s += DG.box(x, y, bw, 30, 'node-blue', 'reference — worker reads it', 'lbl-blue'); y += 40;
+    s += DG.box(x, y, bw, 30, 'node-purple', 'file — pasted into prompt', 'lbl-purple'); y += 40;
+    s += DG.box(x, y, bw, 30, 'node-muted', 'file_if_exists — skip if absent', ''); y += 36;
+    return DG.svg(w, y, s);
+  },
+  parallel: () => {
+    const w = 300; let s = '';
+    s += DG.box(90, 6, 120, 30, 'node-muted', 'items[ ]', '');
+    s += DG.seg(150, 36, 60, 58, 'arrow'); s += DG.seg(150, 36, 150, 58, 'arrow'); s += DG.seg(150, 36, 240, 58, 'arrow');
+    s += DG.box(18, 58, 84, 32, 'node-blue', 'branch 0', 'lbl-blue');
+    s += DG.box(108, 58, 84, 32, 'node-blue', 'branch 1', 'lbl-blue');
+    s += DG.box(198, 58, 84, 32, 'node-blue', 'branch 2', 'lbl-blue');
+    s += DG.seg(60, 90, 150, 112, 'arrow-green'); s += DG.seg(150, 90, 150, 112, 'arrow-green'); s += DG.seg(240, 90, 150, 112, 'arrow-green');
+    s += DG.box(90, 112, 120, 30, 'node-green', 'merged', 'lbl-green');
+    return DG.svg(w, 148, s);
+  },
+  routes: () => {
+    const w = 300; let s = '';
+    s += DG.box(90, 6, 120, 30, 'node-amber', 'decide route', 'lbl-amber');
+    s += DG.seg(150, 36, 70, 58, 'arrow'); s += DG.seg(150, 36, 230, 58, 'arrow');
+    s += DG.box(20, 58, 100, 32, 'node-blue', 'route: hotfix', 'lbl-blue');
+    s += DG.box(180, 58, 100, 32, 'node-purple', 'route: review', 'lbl-purple');
+    s += DG.seg(70, 90, 150, 112, 'arrow-green'); s += DG.seg(230, 90, 150, 112, 'arrow-green');
+    s += DG.box(100, 112, 100, 28, 'node-green', 'continue', 'lbl-green');
+    return DG.svg(w, 146, s);
+  },
+  writeProof: () => DG.vflow([
+    { label: 'Snapshot at step start', cls: 'node-muted' },
+    { label: 'Worker writes the file', cls: 'node-blue' },
+    { label: 'Changed vs snapshot?', cls: 'node-amber' },
+    { label: '✓ Proof — fresh write', cls: 'node-green', lbl: 'lbl-green' },
+  ]),
+  carryForward: () => DG.vflow([
+    { label: 'Step 1  →  summary', cls: 'node-blue' },
+    { label: 'Step 2 sees it  →  summary', cls: 'node-purple' },
+    { label: 'Step 3 sees both', cls: 'node-green' },
+  ]),
+};
+
+// Interactive parallel-output resolution playground — one card per output-path
+// config, each cycling template → item → resolved (per branch) → merge, so the
+// substitution at every phase is visible for EVERY kind of construction. Click a
+// card to replay. Rendered at the END of the parallel_key Details (WS_CONTENT.extra).
+function parallelPlayHTML() {
+  const step = 1.2;
+  const hl = (s) => `<span class="hl">${s}</span>`;
+  const gone = (s) => `<span class="gone">${s}</span>`;
+  const card = (head, rows, note) => {
+    const cyc = (rows.length * step).toFixed(1);
+    const body = rows
+      .map(
+        (r, i) =>
+          `<div class="ws-play-row ws-phase" style="animation-duration:${cyc}s;animation-delay:${(i * step).toFixed(2)}s">` +
+          `<span class="lab">${r[0]}</span><span class="val">${r[1]}</span></div>`,
+      )
+      .join('');
+    return `<div class="ws-play-card"><div class="ws-play-head">${head}</div>${body}${note ? `<div class="ws-play-note">${note}</div>` : ''}</div>`;
+  };
+  return [
+    card('{parallel_key.&lt;field&gt;}', [
+      ['template', `data/{run_id}-${hl('{parallel_key.name}')}-r.json`],
+      ['item', `{ name: "alpha" }`],
+      ['resolved', `data/r1-${hl('alpha')}-r.json`],
+      ['merge', `data/r1-alpha-r.json`],
+    ], 'Per-branch identity → every path is unique → no _branch_N; merge is a no-op.'),
+    card('{parallel_key}  (scalar item)', [
+      ['template', `data/${hl('{parallel_key}')}/out.json`],
+      ['item', `"alpha"`],
+      ['resolved', `data/${hl('alpha')}/out.json`],
+      ['merge', `data/alpha/out.json`],
+    ], 'The whole item as the key — only when it is a plain string / number.'),
+    card('{}  (branch index)', [
+      ['template', `data/${hl('{}')}/out.json`],
+      ['branch 0', `data/${hl('_branch_0')}/out.json`],
+      ['branch 1', `data/${hl('_branch_1')}/out.json`],
+      ['merge', `data/${gone('_branch_N/')}out.json`],
+    ], 'Scaffolding slot → the engine strips _branch_N at merge.'),
+    card('{param}  (shared — same for all branches)', [
+      ['template', `data/${hl('{env}')}/out.json`],
+      ['env = dev', `data/dev/${hl('_branch_0')}/out.json`],
+      ['env = null', `data/${hl('_branch_0')}/out.json`],
+      ['merge', `data/dev/out.json  ·  data/out.json (if null)`],
+    ], 'One value for EVERY branch → no identity → engine auto-adds _branch_N. null → "" so that segment collapses.'),
+    card('* / **  (author glob)', [
+      ['template', `data/specs/${hl('*.md')}`],
+      ['branch 0 writes', `data/specs/alpha.md`],
+      ['branch 1 writes', `data/specs/beta.md`],
+      ['merge', `data/specs/ (flat — all files together)`],
+    ], 'Each branch invents its own filenames → merged flat into one folder.'),
+  ].join('');
+}
+const STUDIO_DIAGRAM_KEYS = {
+  'gate.structural': 'gatePipeline', 'gate.semantic': 'gatePipeline', 'gate.human': 'gatePipeline', 'step.spec_check': 'gatePipeline',
+  'gate.max_gate_retries': 'retries', 'gate.max_step_retries': 'retries', 'step.gate.retries_override': 'retries',
+  'step.subagent': 'subagent',
+  'step.loop_back': 'loopBack', 'step.loop_back.to': 'loopBack', 'step.loop_back.max_iterations': 'loopBack', 'step.loop_back.when': 'loopBack',
+  'step.param_bindings': 'paramBindings',
+  'input.inject': 'inject',
+  'step.parallel': 'parallel', 'step.parallel_key': 'parallelResolve',
+  'step.type': 'planningFlow', 'step.max_substeps': 'planningFlow', 'step.max_plan_attempts': 'planningFlow', 'step.allow_parallel': 'planningFlow', 'step.allow_delegation': 'planningFlow',
+  'step.delegate_to': 'delegationFlow', 'step.delegate_params': 'delegationFlow',
+  'output.from_delegated': 'delegationFlow',
+  'step.routes': 'routes', 'step.routes.when': 'routes', 'step.routes.define': 'routes', 'step.routes.id': 'routes',
+  'output.write_proof': 'writeProof',
+  'context.carry_forward': 'carryForward', 'step.carry_forward': 'carryForward',
+  // Flagship: path/file resolution + params + output validation axes.
+  'output.path': 'pathResolution', 'concept.path_resolution': 'pathResolution',
+  'param.name': 'paramsFlow', 'param.default': 'paramsFlow', 'param.description': 'paramsFlow',
+  'output.struct': 'outputAxes', 'output.optional': 'outputAxes',
+};
+function studioDiagram(key) {
+  const fn = key && STUDIO_DIAGRAM_KEYS[key] && STUDIO_DIAGRAM_FNS[STUDIO_DIAGRAM_KEYS[key]];
+  try { return fn ? fn() : ''; } catch (e) { return ''; }
+}
+
+// Hook the embedded tool's own tooltip/help so it renders in our Details panel
+// instead of its own balloon/modal (see the injected-bridge rationale above).
+function installHelpBridge(frame) {
+  const doc = frame.contentDocument;
+  if (!doc) return;
+  try {
+    if (!doc.getElementById('ws-help-bridge')) {
+      const s = doc.createElement('script');
+      s.id = 'ws-help-bridge';
+      s.textContent = [
+        '(function(){',
+        '  try {',
+        '    if (typeof showHelp === "function" && typeof HELP === "object") {',
+        '      showHelp = function(btn, key){',
+        '        var d = "";',
+        '        try { if (typeof HELP_DIAGRAMS === "object" && HELP_DIAGRAMS[key]) d = HELP_DIAGRAMS[key](); } catch(e){}',
+        '        try { window.parent.__wsHelp(key, HELP[key] || "", d, true); } catch(e){}',
+        '      };',
+        '    }',
+        '  } catch(e){}',
+        '  try {',
+        '    var route = function(e){',
+        '      if (!e.target || !e.target.closest) return;',
+        '      var hk = e.target.closest("[data-help]");',
+        '      if (hk) { try { window.parent.__wsHelp(hk.getAttribute("data-help"), "", "", e.type === "click"); } catch(x){} return; }',
+        '      var el = e.target.closest("[data-tip]");',
+        '      if (el) { try { var kl = el.querySelector(".step-chip-key,.context-chip-key"); var lab = ((kl ? kl.textContent : el.textContent) || "").trim(); window.parent.__wsTraceHelp(lab, el.getAttribute("data-tip"), e.type === "click"); } catch(x){} return; }',
+        '      // Fallback: any element with a native title → Details, and convert',
+        '      // its title to data-tip so the native balloon never shows again.',
+        '      var tt = e.target.closest("[title]");',
+        '      // Never rewrite the title of a CONTROL: the tools treat data-tip as',
+        '      // "clicking me opens a tooltip" and swallow the click in capture,',
+        '      // which would kill the button (live: the inbox Accept/Reject went',
+        '      // dead after the first hover, while Send — no title — kept working).',
+        '      if (tt && tt.closest("button, a, input, select, textarea, [onclick]")) return;',
+        '      if (tt) { var t = tt.getAttribute("title"); if (t) { tt.setAttribute("data-tip", t); tt.removeAttribute("title"); try { window.parent.__wsTraceHelp((tt.textContent||"").trim(), t, e.type === "click"); } catch(x){} } }',
+        '    };',
+        '    document.addEventListener("mouseover", route, true);',
+        '    document.addEventListener("click", route, true);',
+        '  } catch(e){}',
+        '})();',
+      ].join('\n');
+      doc.body.appendChild(s);
+    }
+    if (!doc.getElementById('ws-hide-chrome')) {
+      const st = doc.createElement('style');
+      st.id = 'ws-hide-chrome';
+      // Hide each embedded tool's OWN top toolbar (.header) and file-picker/
+      // drop zone (#dropZone) — those actions live in the studio shell now
+      // (New/Load/Export/Preview/Save in topbar+sidebar; no auto-refresh toggle
+      // (always live); no file picker). The editor's Workflow/Structs tab bar
+      // (.tab-bar) is intentionally kept. Also suppress the trace balloon
+      // (.tip-hint/.tip-popup) — routed to the Details panel.
+      st.textContent = [
+        '.header { display: none !important; }',
+        '#dropZone { display: none !important; }',
+        '.tip-popup, .tip-hint { display: none !important; }',
+        // Don't let a section card clip its own body/chips (fixes the
+        // GATE DEFAULTS chips being cut off at the card edge).
+        '.section-card { overflow: visible !important; }',
+        '.section-header { flex-wrap: wrap; }',
+        // The shell floats a 44px round control in the tool's top-right corner
+        // (#hintBubble). Whoever puts something there is who must make room for
+        // it — the tool cannot know, and its own actions were landing underneath.
+        ':root { --acts-right: 48px; }',
+      ].join('\n');
+      doc.head.appendChild(st);
+    }
+  } catch (e) { /* same-origin expected; fail quiet */ }
+}
+
+/* ── Interactions ── */
+function setSection(sec) {
+  if (sec !== 'editor' && sec !== 'traces' && sec !== 'messages') return;
+  state.section = sec;
+  savePrefs();
+  // Switching to the Editor while a trace is open but no workflow is picked
+  // (e.g. engine auto-open ?trace=) — resolve the workflow from the trace file
+  // so the Editor opens the workflow you were just tracing.
+  if (sec === 'editor' && !state.selectedWorkflow && state.directTracePath) {
+    void resolveWorkflowFromTrace(state.directTracePath);
+  }
+  writeUrl(); renderSidebar(); renderMain();
+}
+async function resolveWorkflowFromTrace(tracePath) {
+  try {
+    const t = await fetchJson(tracePath);
+    const name = t && typeof t.workflow === 'string' ? t.workflow : null;
+    if (name && workflowByName(name)) {
+      state.selectedWorkflow = name; state.editorNew = false;
+      writeUrl(); renderSidebar(); renderMain();
+    }
+  } catch (e) { /* best-effort */ }
+}
+function selectWorkflow(name) { state.selectedWorkflow = name; state.editorNew = false; state.section = 'editor'; writeUrl(); renderSidebar(); renderMain(); }
+
+/* ── Editor actions (relocated from the editor's toolbar into the shell) ── */
+function editorCw() { return editorFrame.contentWindow; }
+function editorExample() { try { editorCw().loadExample(); } catch (e) {} }
+function newWorkflowInEditor() {
+  state.editorNew = true; state.selectedWorkflow = null; state.selectedRun = null;
+  state.section = 'editor'; state.editorLoadedFor = null;
+  ensureEditorLoaded();
+  const cw = editorCw();
+  if (cw && typeof cw.newWorkflow === 'function') cw.newWorkflow();
+  writeUrl(); renderSidebar(); renderMain();
+}
+function loadWorkflowFile() { const inp = document.getElementById('wsWfInput'); inp.value = ''; inp.click(); }
+function onWfFileChosen(ev) {
+  const f = ev.target.files && ev.target.files[0]; if (!f) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    state.editorNew = true; state.selectedWorkflow = null; state.section = 'editor'; state.editorLoadedFor = null;
+    ensureEditorLoaded(); renderSidebar(); renderMain();
+    const apply = () => { const cw = editorCw(); if (cw && typeof cw.__studioLoadText === 'function') cw.__studioLoadText(String(rd.result)); else setTimeout(apply, 120); };
+    apply();
+  };
+  rd.readAsText(f);
+}
+/** Copy a workflow's raw YAML (from disk) to the clipboard — the 3-dots menu. */
+async function copyWorkflowYaml(name) {
+  state._menuFor = null; renderSidebar();
+  const wf = workflowByName(name); if (!wf) return;
+  const text = await fetchText(state.apiBase + wf.path);
+  if (text === null) { wsToast('Could not read ' + name); return; }
+  try { await navigator.clipboard.writeText(text); wsToast('Copied ' + name + ' YAML'); }
+  catch (e) { wsToast('Copy failed (clipboard blocked)'); }
+}
+function toggleRowMenu(name, ev) { if (ev && ev.stopPropagation) ev.stopPropagation(); state._menuFor = state._menuFor === name ? null : name; renderSidebar(); }
+function loadTraceFile() { const inp = document.getElementById('wsTraceInput'); inp.value = ''; inp.click(); }
+function onTraceFileChosen(ev) {
+  const f = ev.target.files && ev.target.files[0]; if (!f) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    state.section = 'traces'; state.selectedRun = null; state.directTracePath = null;
+    renderSidebar(); renderMain();
+    traceFrame.classList.remove('hidden'); document.getElementById('placeholder').style.display = 'none';
+    const apply = () => { const cw = traceFrame.contentWindow; if (cw && typeof cw.__studioLoadTraceText === 'function') cw.__studioLoadTraceText(String(rd.result)); else { if (!traceFrame.getAttribute('src')) traceFrame.setAttribute('src', 'trace-viewer.html'); setTimeout(apply, 150); } };
+    apply();
+  };
+  rd.readAsText(f);
+}
+async function exportSelectedTrace() {
+  if (!state.selectedRun) return;
+  const url = state.apiBase + '/local/workflow_runs/' + state.selectedRun + '/trace.json';
+  try {
+    const t = await fetchText(url);
+    if (t === null) { wsToast('Could not read the trace file.'); return; }
+    const blob = new Blob([t], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = state.selectedRun + '.trace.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  } catch (e) { wsToast('Export failed.'); }
+}
+function selectRun(wf, runId) { state.selectedWorkflow = wf; state.selectedRun = runId; state.directTracePath = null; state.editorNew = false; writeUrl(); renderSidebar(); renderMain(); }
+function toggleFolder(wf) { state.openFolders[wf] = !state.openFolders[wf]; renderSidebar(); }
+function goToTracesForSelected() { if (!state.selectedWorkflow) return; state.section = 'traces'; state.openFolders[state.selectedWorkflow] = true; writeUrl(); renderSidebar(); renderMain(); }
+
+/* ── Save to disk (D3) — POST the editor's current YAML to the trace-server ── */
+let _toastTimer = null;
+function wsToast(msg) {
+  const t = document.getElementById('wsToast');
+  t.textContent = msg; t.classList.add('show');
+  if (_toastTimer) clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => t.classList.remove('show'), 2800);
+}
+/**
+ * Run the engine's own validator over the YAML the editor is holding.
+ * Resolves to { ok, scope, errors, warnings } from the server, or null when the
+ * server cannot be reached — null means "no answer", which the caller must not
+ * confuse with "no problems".
+ */
+async function validateViaServer(yaml) {
+  const wf = state.selectedWorkflow ? workflowByName(state.selectedWorkflow) : null;
+  let name = null;
+  try { const cw = editorCw(); if (cw && typeof cw.__studioGetWorkflowName === 'function') name = cw.__studioGetWorkflowName(); } catch (e) {}
+  // An existing workflow validates against its own directory (so the rules that
+  // read the filesystem can run); a workflow that is not on disk yet has none.
+  const path = wf ? wf.path : (name ? '/workflows/templates/my_workflows/' + name + '/workflow.yaml' : '');
+  try {
+    const r = await fetch(state.apiBase + '/api/validate', {
+      method: 'POST', headers: apiHeaders(),
+      body: JSON.stringify({ content: yaml, path: path }),
+    });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch (e) { return null; }
+}
+
+async function saveWorkflow() {
+  const cw = editorCw();
+  let yaml, name = null;
+  try {
+    yaml = cw.__studioGetWorkflowYaml();
+    if (typeof cw.__studioGetWorkflowName === 'function') name = cw.__studioGetWorkflowName();
+  } catch (e) { wsToast('Cannot save — ' + (e && e.message ? e.message : 'invalid workflow')); return; }
+  // Target: an existing selected workflow keeps its path; a fresh (New) one is
+  // written to my_workflows/<name>/workflow.yaml.
+  let path;
+  const wf = state.selectedWorkflow ? workflowByName(state.selectedWorkflow) : null;
+  if (wf) path = wf.path;
+  else if (name) path = '/workflows/templates/my_workflows/' + name + '/workflow.yaml';
+  else { wsToast('Cannot save — give the workflow a name first'); return; }
+  try {
+    const r = await fetch(state.apiBase + '/api/write', {
+      method: 'POST', headers: apiHeaders(),
+      body: JSON.stringify({ path, content: yaml }),
+    });
+    let j = {}; try { j = await r.json(); } catch (e) {}
+    if (r.ok && j.ok) {
+      wsToast('Saved ' + (state.selectedWorkflow || name));
+      try { cw.__studioMarkSaved(); } catch (e) {}
+      // A new workflow now exists on disk → select it so it appears in the
+      // sidebar and further saves target it; refresh picks up the new entry.
+      if (!wf && name) { state.editorNew = false; state.selectedWorkflow = name; state.editorLoadedFor = name; writeUrl(); }
+      _sig = ''; void refresh();
+    } else wsToast('Save failed: ' + (j.error || ('HTTP ' + r.status)));
+  } catch (e) { wsToast('Save failed: ' + (e && e.message ? e.message : String(e))); }
+}
+function toggleSidebar() { state.sidebarCollapsed = !state.sidebarCollapsed; renderSidebar(); savePrefs(); }
+function togglePanel() {
+  if (state.panelHeld) { nudgePanelHold(); return; }
+  state.panelCollapsed = !state.panelCollapsed;
+  renderPanel();
+}
+function toggleOpenProject() { state._openProjectShown = !state._openProjectShown; renderSidebar(); }
+function onPickProject(base, slug) { state._openProjectShown = false; if (base === state.apiBase) { renderSidebar(); return; } switchProject({ base, slug }); }
+async function openProjectByPath() {
+  const inp = document.getElementById('openProjPath');
+  const err = document.getElementById('openProjErr');
+  const path = inp ? inp.value.trim() : '';
+  if (!path) return;
+  const showErr = (m) => { if (err) { err.textContent = m; err.style.display = 'block'; } };
+  try {
+    const r = await fetch('/api/open-project', { method: 'POST', headers: apiHeaders(), body: JSON.stringify({ path }) });
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j || j.ok !== true) {
+      showErr((j && j.error) ? j.error : (r.status === 403
+        ? 'The page was opened without its access token — re-open the studio from the URL riglane serve printed.'
+        : 'Could not open that path.'));
+      return;
+    }
+    if (!state.projects.some((p) => p.slug === j.slug)) state.projects.push({ slug: j.slug, base: j.base });
+    onPickProject(j.base, j.slug);
+  } catch (e) { showErr('Could not reach the server.'); }
+}
+
+(function () {
+  const resizeEl = document.getElementById('resize');
+  resizeEl.addEventListener('pointerdown', (e) => {
+    if (state.panelCollapsed) return;
+    e.preventDefault();
+    // Capture the pointer on the handle so moves keep coming to US even when
+    // the cursor passes over an iframe (iframes otherwise swallow the events —
+    // the "drag blocks then jumps" bug). Also disable iframe hit-testing during
+    // the drag as a belt-and-suspenders.
+    try { resizeEl.setPointerCapture(e.pointerId); } catch (_) {}
+    editorFrame.style.pointerEvents = 'none';
+    traceFrame.style.pointerEvents = 'none';
+    document.body.style.userSelect = 'none';
+    const onMove = (ev) => {
+      state.panelWidth = Math.max(260, Math.min(window.innerWidth - 360, window.innerWidth - ev.clientX));
+      document.getElementById('panel').style.width = state.panelWidth + 'px';
+    };
+    const onUp = () => {
+      try { resizeEl.releasePointerCapture(e.pointerId); } catch (_) {}
+      editorFrame.style.pointerEvents = '';
+      traceFrame.style.pointerEvents = '';
+      document.body.style.userSelect = '';
+      savePrefs();                 // once, at the end of the drag
+
+      resizeEl.removeEventListener('pointermove', onMove);
+      resizeEl.removeEventListener('pointerup', onUp);
+      resizeEl.removeEventListener('pointercancel', onUp);
+    };
+    resizeEl.addEventListener('pointermove', onMove);
+    resizeEl.addEventListener('pointerup', onUp);
+    resizeEl.addEventListener('pointercancel', onUp);
+  });
+})();
+
+/* ── Hint bubble ───────────────────────────────────────────────────────────
+   A queue of one-off teaching hints shown over the top of the Editor canvas.
+   Each hint is dismissible INDIVIDUALLY: the checkbox suppresses that hint id
+   only, never the mechanism, so later hints still surface. Add a hint by
+   appending to STUDIO_HINTS — first undismissed one wins. */
+const HINT_DELAY_MS = 10000;
+const HINT_STORE = 'riglane.studio.hints.dismissed';
+
+/* ── Remembered chrome ─────────────────────────────────────────────────────
+   The Details lock, the panel width, the sidebar, the open section and the
+   hints you have closed survive a reload — and, more to the point, survive a
+   SERVER RESTART. They cannot live in localStorage alone: this page is served
+   from an ephemeral port, and browser storage is scoped to scheme+host+PORT, so
+   every restart hands us a fresh empty store (that is why dismissed hints kept
+   coming back). Cookies would outlive the port but are shared across every
+   project on 127.0.0.1 and ride on every request, so the server keeps the file
+   (~/.riglane/studio-ui.json) and we treat localStorage as a same-origin cache:
+   it paints the right chrome on the first frame, the server corrects it a
+   moment later. Everything degrades quietly — a blocked store or an
+   unreachable/read-only server just means the defaults. */
+const PREFS_STORE = 'riglane.studio.prefs';
+const PREF_KEYS = ['section', 'sidebarCollapsed', 'panelCollapsed', 'panelHeld', 'panelWidth'];
+let prefsLoaded = false;      // until the server answers, do not write back
+let prefsSaveTimer = null;
+
+function prefsSnapshot() {
+  const out = {};
+  for (const k of PREF_KEYS) out[k] = state[k];
+  out.dismissedHints = hintDismissedIds();
+  return out;
+}
+
+function applyPrefs(p) {
+  if (!p || typeof p !== 'object') return;
+  if (typeof p.section === 'string' && !state.directTracePath
+      && ['editor', 'traces', 'messages'].includes(p.section)) state.section = p.section;
+  if (typeof p.sidebarCollapsed === 'boolean') state.sidebarCollapsed = p.sidebarCollapsed;
+  if (typeof p.panelCollapsed === 'boolean') state.panelCollapsed = p.panelCollapsed;
+  if (typeof p.panelHeld === 'boolean') state.panelHeld = p.panelHeld;
+  if (typeof p.panelWidth === 'number' && p.panelWidth >= 220 && p.panelWidth <= 1200) {
+    state.panelWidth = Math.round(p.panelWidth);
+  }
+  if (Array.isArray(p.dismissedHints)) {
+    try { localStorage.setItem(HINT_STORE, JSON.stringify(p.dismissedHints)); } catch (e) {}
+  }
+}
+
+/** Cached prefs, for the first paint — before the server has answered. */
+function prefsFromCache() {
+  try { return JSON.parse(localStorage.getItem(PREFS_STORE) || 'null'); }
+  catch (e) { return null; }
+}
+
+/** Persist: cache immediately (instant, no request), server debounced. */
+function savePrefs() {
+  if (!prefsLoaded) return;                 // never write back what we have not read
+  const snap = prefsSnapshot();
+  try { localStorage.setItem(PREFS_STORE, JSON.stringify(snap)); } catch (e) {}
+  if (prefsSaveTimer) clearTimeout(prefsSaveTimer);
+  prefsSaveTimer = setTimeout(() => {
+    prefsSaveTimer = null;
+    if (!state.apiBase && state.apiBase !== '') return;
+    const headers = { 'Content-Type': 'application/json' };
+    if (state.token) headers['X-Riglane-Token'] = state.token;
+    fetch(state.apiBase + '/api/ui-prefs', {
+      method: 'POST', headers, body: JSON.stringify(snap),
+    }).catch(() => {});                     // chrome is never worth an error
+  }, 400);
+}
+
+/** Read the stored chrome once at boot: cache first, then the server. */
+async function loadPrefs() {
+  applyPrefs(prefsFromCache());
+  try {
+    const r = await fetch(state.apiBase + '/api/ui-prefs.json', { cache: 'no-store' });
+    if (r.ok) {
+      const p = await r.json();
+      applyPrefs(p);
+      try { localStorage.setItem(PREFS_STORE, JSON.stringify({ ...prefsSnapshot(), ...p })); } catch (e) {}
+    }
+  } catch (e) { /* not served, or offline — the cache/defaults stand */ }
+  prefsLoaded = true;
+}
+const STUDIO_HINTS = [
+  {
+    id: 'create-via-skill',
+    eyebrow: 'Hint',
+    title: 'Did you know you can create workflows with a skill?',
+    body: `Instead of hand-writing the YAML — or configuring every step and field by hand here in the
+           editor — run <code>/riglane-create-workflow</code> in your coding agent. It designs the
+           workflow together with you, pulls the reference topics it needs, validates the draft before
+           anything is written, and saves it to <code>my_workflows/&lt;name&gt;/workflow.yaml</code>, where it
+           appears in the sidebar on the left. The editor is then the fastest place to review, adjust
+           and visualise what it produced.`,
+  },
+  {
+    id: 'inbox-messages',
+    eyebrow: 'New',
+    title: 'A run can now ask you questions here — not just in the terminal',
+    sections: ['editor', 'traces', 'messages'],
+    body: `Give a human gate <code>human_channel: external</code> (or <code>both</code>) — in the editor
+           it is the <b>via</b> selector next to the human gate, on the graph's gate marker and in the
+           loop/branch deciders. The step's question then lands in the new <b>Messages</b> section
+           above (pending ones carry a badge) and as a dialog right on the waiting step's trace card —
+           answer from either place, from an external program via the Local API, or in the terminal as
+           before. Whichever channel answers first wins, and every answer becomes a durable record:
+           who, what, when, through which channel. The engine refuses to complete the step until a
+           fresh answer exists, so an approval can no longer be assumed — it is verified. Try it:
+           run the <code>inbox-demo</code> example workflow.`,
+  },
+  {
+    id: 'inbox-external-apps',
+    eyebrow: 'New',
+    title: 'Your own app can receive the questions — and answer them',
+    sections: ['editor', 'messages'],
+    body: `Building your own interface on top of Riglane (an exe, a python tool, a bot)? Point the run
+           at it: the <b>Inbox webhook URL</b> field on the workflow form (a committed default), the
+           <code>--inbox-webhook</code> flag / the <code>inbox_webhook</code> field of
+           <code>POST /api/run</code> (per-run — the app that launches the run names its own callback),
+           or env/config. Every question is then POSTed to that address as a <b>self-contained
+           envelope</b>: the message plus a <code>respond</code> block carrying the URL, a one-shot
+           token and the body template — your app shows the question in its own UI and answers with a
+           single POST back. The token answers only that message and survives server restarts. Programs
+           that would rather poll read <code>.riglane/local/serve.json</code> (base URL + token) and use
+           <code>GET /api/inbox.json</code> + <code>POST /api/inbox/respond</code>.`,
+  },
+];
+
+function hintDismissedIds() {
+  try { const v = JSON.parse(localStorage.getItem(HINT_STORE) || '[]'); return Array.isArray(v) ? v : []; }
+  catch (e) { return []; } // file:// or blocked storage — treat as nothing dismissed
+}
+function hintDismiss(id) {
+  try {
+    const ids = hintDismissedIds();
+    if (!ids.includes(id)) { ids.push(id); localStorage.setItem(HINT_STORE, JSON.stringify(ids)); }
+  } catch (e) { /* non-fatal: the hint simply reappears next session */ }
+  savePrefs();   // the file is what survives a server restart, not the store
+}
+function hintUndismiss(id) {
+  try {
+    const ids = hintDismissedIds().filter(x => x !== id);
+    localStorage.setItem(HINT_STORE, JSON.stringify(ids));
+  } catch (e) { /* non-fatal — the hint stays dismissed until next session */ }
+  savePrefs();
+}
+/* The hints this section can show, in list order. This IS the browsable list:
+   the arrows walk it whole, dismissed entries included, because arrowing back
+   to something you dismissed is the one way to find it again. Only the FIRST
+   hint shown is chosen by dismissal (activeHint). */
+function hintsForSection() {
+  return STUDIO_HINTS.filter(h => (h.sections || ['editor']).includes(state.section));
+}
+function activeHint() {
+  const done = hintDismissedIds();
+  return hintsForSection().find(h => !done.includes(h.id)) || null;
+}
+
+/* Shown only on the Editor section (a hint about authoring is noise while
+   reading a trace) and only once the boot delay has elapsed. Deliberately NOT
+   gated on having a workflow open — an empty editor is exactly when "you can
+   generate one with a skill" is most useful. */
+function renderHint() {
+  const el = document.getElementById('hintBubble');
+  if (!el) return;
+  const hint = activeHint();
+  const wanted = state._hintReady && !!hint;
+  if (!wanted) {
+    if (el.classList.contains('open')) collapseHint();
+    el.classList.add('hidden');
+    return;
+  }
+  // Before the re-pop guard: the inset must keep tracking the scrollbar even
+  // while the bubble is already up.
+  measureHintScrollbar(el);
+  if (!el.classList.contains('hidden')) {
+    if (el.dataset.hintId === hint.id) return;   // same hint — don't re-pop
+    collapseHint();                              // a different hint applies here
+  }
+  hintShow(hintsForSection().indexOf(hint));
+  el.classList.remove('hidden');
+  // Restart the entry animation (class must be re-added after a reflow).
+  el.classList.remove('entering'); void el.offsetWidth; el.classList.add('entering');
+}
+
+/* Write ONE hint into the card — content only, never open/hidden state. That
+   is what lets the same function serve the first render and every arrow press:
+   arrowing swaps the text inside a card that is already up, instead of
+   collapsing and re-popping it. The checkbox reflects the REAL dismissal of the
+   hint on screen, so arrowing onto a dismissed one shows it ticked and
+   unticking it brings that hint back. */
+function hintShow(idx) {
+  const list = hintsForSection();
+  const hint = list[idx];
+  const el = document.getElementById('hintBubble');
+  if (!hint || !el) return;
+  el.dataset.hintId = hint.id;
+  el.dataset.hintIdx = String(idx);
+  document.getElementById('hintEyebrow').textContent = hint.eyebrow;
+  document.getElementById('hintTitle').textContent = hint.title;
+  document.getElementById('hintBody').innerHTML = hint.body;
+  document.getElementById('hintNever').checked = hintDismissedIds().includes(hint.id);
+  const nav = document.getElementById('hintNav');
+  const prev = document.getElementById('hintPrev');
+  const next = document.getElementById('hintNext');
+  const pos = document.getElementById('hintPos');
+  if (nav) nav.style.visibility = list.length > 1 ? '' : 'hidden';
+  if (prev) prev.disabled = idx <= 0;
+  if (next) next.disabled = idx >= list.length - 1;
+  if (pos) pos.textContent = (idx + 1) + ' / ' + list.length;
+}
+
+/* Move one hint along the browsable list. The card is taller or shorter for the
+   next hint, and when it is OPEN its height is an explicit pixel value — so the
+   geometry has to be re-committed or the new body clips or leaves a gap. */
+function hintStep(delta) {
+  const el = document.getElementById('hintBubble');
+  if (!el) return;
+  const idx = Number(el.dataset.hintIdx || 0) + delta;
+  if (idx < 0 || idx >= hintsForSection().length) return;
+  hintShow(idx);
+  if (el.classList.contains('open')) hintMeasure();
+}
+
+/* Commit the card's geometry: measure at its FINAL width, then publish the
+   height on the bubble. Shared by openHint (where `left` and `height` must
+   animate as one motion) and by hintStep (where only the height changes). */
+function hintMeasure() {
+  const el = document.getElementById('hintBubble');
+  const card = document.getElementById('hintCard');
+  const main = document.getElementById('main');
+  if (!el || !card || !main) return;
+  const cs = getComputedStyle(el);
+  const gap = parseFloat(cs.getPropertyValue('--hint-gap')) || 14;
+  const sb = parseFloat(cs.getPropertyValue('--hint-sb')) || 0;
+  card.style.width = Math.max(0, main.clientWidth - gap * 2 - sb) + 'px';
+  const h = card.offsetHeight;
+  card.style.width = '';
+  el.style.height = h + 'px';
+}
+
+/* The embedded tool scrolls inside its own iframe, so #main's right edge sits
+   BEHIND that scrollbar. Publish its width as --hint-sb so the visible gap
+   matches the top inset. Re-measured on every render because a scrollbar
+   appears and disappears with the loaded workflow's length. */
+function measureHintScrollbar(el) {
+  let sb = 0;
+  const f = document.getElementById('editorFrame');
+  if (f && !f.classList.contains('hidden')) {
+    try {
+      const w = f.contentWindow;
+      const de = w && w.document && w.document.documentElement;
+      if (de) sb = Math.max(0, Math.min(28, w.innerWidth - de.clientWidth));
+    } catch (e) {
+      sb = 15; // not readable yet — assume a classic bar rather than sit flush
+    }
+  }
+  el.style.setProperty('--hint-sb', sb + 'px');
+}
+
+function openHint() {
+  const el = document.getElementById('hintBubble');
+  const card = document.getElementById('hintCard');
+  const main = document.getElementById('main');
+  if (!el || !card || !main) return;
+  el.classList.remove('entering');
+  measureHintScrollbar(el);
+  // Measure the card at its FINAL width and commit the geometry in this same
+  // frame, so `left` (from .open) and `height` animate as one motion. Measuring
+  // after the widen (rAF) would start the height a couple of frames late and
+  // the morph visibly kinks. Insets are read back from the custom properties so
+  // the two sides cannot drift from the CSS.
+  hintMeasure();
+  el.classList.add('open');
+  document.getElementById('hintOpen').setAttribute('aria-expanded', 'true');
+  card.setAttribute('tabindex', '-1');
+  card.focus({ preventScroll: true });
+}
+
+function collapseHint() {
+  const el = document.getElementById('hintBubble');
+  if (!el) return;
+  el.classList.remove('open');
+  el.style.height = '';
+  const btn = document.getElementById('hintOpen');
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+}
+
+function closeHint() {
+  const el = document.getElementById('hintBubble');
+  if (!el) return;
+  const never = document.getElementById('hintNever');
+  const dismissed = !!(never && never.checked);
+  // Both directions: the box now MIRRORS the stored state (arrowing onto a
+  // dismissed hint shows it ticked), so closing with it cleared is an explicit
+  // "show this one again" and must undo the dismissal.
+  if (el.dataset.hintId) {
+    if (dismissed) hintDismiss(el.dataset.hintId);
+    else hintUndismiss(el.dataset.hintId);
+  }
+  collapseHint();
+  if (dismissed) {
+    // Let the morph finish, then either queue the next hint or retire the
+    // bubble. renderHint() re-pops only when a fresh hint is actually queued.
+    window.setTimeout(() => { el.classList.add('hidden'); renderHint(); }, 460);
+  }
+}
+
+document.addEventListener('keydown', (e) => {
+  const el = document.getElementById('hintBubble');
+  if (!el || !el.classList.contains('open')) return;
+  if (e.key === 'Escape') { collapseHint(); return; }
+  // Arrows browse the hints while the card has focus. Guarded on the open card
+  // so they never steal the keys from the graph or a form underneath.
+  if (e.key === 'ArrowLeft') { e.preventDefault(); hintStep(-1); }
+  else if (e.key === 'ArrowRight') { e.preventDefault(); hintStep(1); }
+});
+
+/* ── Icons ── */
+function iconSidebar() { return '<svg width="17" height="17" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="16" rx="2" stroke="currentColor" stroke-width="1.6"/><path d="M9 4v16" stroke="currentColor" stroke-width="1.6"/></svg>'; }
+function iconChevronLeft() { return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>'; }
+function iconCaret() { return '<svg width="10" height="10" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'; }
+function iconFolder() { return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" style="flex:0 0 auto"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z" stroke="currentColor" stroke-width="1.5"/></svg>'; }
+function iconPlus() { return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="flex:0 0 auto"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>'; }
+function iconUpload() { return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="flex:0 0 auto"><path d="M12 15V4M8 8l4-4 4 4M5 19h14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>'; }
+
+/* ── Boot ── */
+readUrl();
+// Paint from the cache immediately, then let the server's copy correct it —
+// the file is the source of truth precisely because it outlives the port.
+applyPrefs(prefsFromCache());
+renderTopbar(); renderSidebar(); renderMain(); renderLive(); renderPanel();
+void loadPrefs().then(() => {
+  renderTopbar(); renderSidebar(); renderMain(); renderPanel();
+});
+void refresh();
+setInterval(() => void refresh(), POLL_MS);
+setInterval(() => void checkToolsVersion(), POLL_MS);
+
+/* ── Stale-page detection ──────────────────────────────────────────────────
+   The studio and the tools it frames are served live from the installed
+   tools directory, refreshed on every upgrade or server restart. A studio
+   left open across an upgrade keeps running the OLD scripts forever — its
+   polling renews the DATA, never the code — so a shipped fix reads as
+   "still broken". Watch the served files' Last-Modified and offer a reload. */
+const _toolStamps = {};
+let _staleShown = false;
+async function checkToolsVersion() {
+  const files = [location.pathname, 'workflow-editor.html', 'trace-viewer.html'];
+  for (const f of files) {
+    try {
+      const r = await fetch(f, { method: 'HEAD', cache: 'no-store' });
+      if (!r.ok) continue;
+      const stamp = r.headers.get('Last-Modified');
+      if (!stamp) continue;
+      if (_toolStamps[f] === undefined) { _toolStamps[f] = stamp; continue; }
+      if (_toolStamps[f] !== stamp && !_staleShown) { _staleShown = true; showStaleBanner(); return; }
+    } catch { /* offline — try again next cycle */ }
+  }
+}
+function showStaleBanner() {
+  const bar = document.createElement('div');
+  bar.className = 'stale-banner';
+  bar.innerHTML = '<span>These tools were updated on disk — you are running the older page.</span>';
+  const btn = document.createElement('button');
+  btn.textContent = 'Reload';
+  btn.onclick = () => location.reload();
+  bar.appendChild(btn);
+  document.body.appendChild(bar);
+}
+// Hint bubble pops in after the boot delay — long enough that it reads as an
+// offer rather than an interruption. Skipped entirely when every hint is
+// already dismissed, so the timer costs nothing in that case.
+if (STUDIO_HINTS.some(h => !hintDismissedIds().includes(h.id))) {
+  window.setTimeout(() => { state._hintReady = true; renderHint(); }, HINT_DELAY_MS);
+}
+</script>
+</body>
+</html>

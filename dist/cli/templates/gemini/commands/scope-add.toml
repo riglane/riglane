@@ -1,0 +1,32 @@
+description = "Create a new Riglane spec scope — config entry (id + label + coverage hint), directory, and empty indexes"
+
+prompt = '''
+# Riglane scope-add
+
+Arguments: {{args}}
+
+Declare a new scope. Run via the shell tool:
+
+```
+riglane scope add <id> "<label>" [--hint "<coverage>"]
+```
+
+- `<id>`: `^[a-z][a-z0-9-]*$` (lowercase, starts with a letter; `generic` is reserved).
+- `<label>`: human-readable description.
+- `--hint`: the COVERAGE HINT — what this scope's specs govern and what does NOT belong (with
+  where those go instead).
+
+**Proactively capture a coverage hint.** It is the single most useful signal for keeping specs
+in the right scope — the engine injects it into the guidance agents receive at spec-touching
+steps. If the user did not supply one, ASK briefly: what does this scope cover
+(protocol/integration/subsystem)? what is explicitly OUT of scope, and where does it belong
+(e.g. "shared validation → generic")? Compose a one-to-three-sentence hint, e.g.:
+`Payments API protocol, checkout, refunds. NOT: cross-cutting invariants (→ generic).`
+Only skip if the user declines — then remind them about `riglane scope hint <id> "<text>"`.
+
+The command creates `_scope-config.json` if absent, appends `{id, label, hint?}`, and creates
+`.riglane/specs/<id>/` with empty engine-owned `_index.json` and `_registry.json`. Relay the output.
+
+Related: `riglane scope hint <id> "<text>"` (set/replace later) · `/riglane:scope-list` ·
+`/riglane:scope-set <id>`.
+'''

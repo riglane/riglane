@@ -1,0 +1,101 @@
+{
+    "$schema": "https://json-schema.org/draft-07/schema#",
+    "$id": "riglane-gate-result-v2",
+    "title": "Riglane Gate Result (Side-Channel File, v2 per-branch ledger)",
+    "description": "Schema for gate-result.json — the v2 merged ledger. A parallel step fires the gate hook once PER BRANCH, so several processes write one file: each writer upserts ONLY its branch under the shared file lock, verdict fields merge by freshness (validated_at), loop_count is monotonic, and the top-level aggregate is recomputed on every write. Written by the riglane gate-check hook AND the engine-inline gate; read by step_collect_result. Ephemeral (cleared at step_begin) — no v1 migration; a v1-shaped document is replaced, never merged.",
+    "type": "object",
+    "required": ["step", "run_token", "schema", "branches", "passed", "failed_branches", "checks", "failures", "details", "loop_count"],
+    "additionalProperties": false,
+    "properties": {
+        "step": {
+            "type": "string",
+            "description": "Step name this ledger belongs to. step_collect_result MUST verify this matches the expected step before consuming the result; ledgerForStep refuses to merge across steps."
+        },
+        "run_token": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "description": "Manifest's run_token at time of writing (UUID4). step_collect_result MUST compare this against manifest.run_token to detect stale results from previous runs/sessions; ledgerForStep refuses to merge across runs."
+        },
+        "schema": {
+            "const": 2,
+            "description": "Ledger schema discriminator. ledgerForStep replaces (never merges) any document without it."
+        },
+        "branches": {
+            "type": "object",
+            "description": "Per-branch records for a parallel step, keyed by branch index as a string. EMPTY object for a non-parallel step (the writer sets the top-level verdict directly).",
+            "additionalProperties": false,
+            "patternProperties": {
+                "^[0-9]+$": {
+                    "type": "object",
+                    "required": ["passed", "checks", "failures", "details", "loop_count", "validated_at", "source"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "passed": { "type": "boolean" },
+                        "checks": { "type": "integer", "minimum": 0 },
+                        "failures": { "type": "integer", "minimum": 0 },
+                        "details": { "type": "array", "items": { "type": "string" } },
+                        "loop_count": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Monotonic in-session retry count for THIS branch — max(existing, incoming), outside freshness, so a stampeding zero-count writer can never erase retry history."
+                        },
+                        "validated_at": {
+                            "type": "string",
+                            "description": "ISO local-offset timestamp of the validation that produced this record. Freshness anchor: a strictly older observation never replaces a newer verdict."
+                        },
+                        "source": { "type": "string", "enum": ["hook", "engine-inline"] }
+                    }
+                }
+            }
+        },
+        "passed": {
+            "type": "boolean",
+            "description": "Aggregate verdict. Non-parallel: the step's verdict. Parallel: all-pass or PARTIAL failure => true (partial keeps succeeded branches' work); only catastrophic all-fail => false."
+        },
+        "failed_branches": {
+            "type": "array",
+            "items": { "type": "integer", "minimum": 0 },
+            "description": "Indices of failed branches (empty for non-parallel or all-pass). Recomputed on every write."
+        },
+        "checks": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Total structural checks. Parallel: sum over branches."
+        },
+        "failures": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Failed checks. Parallel: sum over branches."
+        },
+        "details": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Failure descriptions. Parallel: per-branch details prefixed with '[branch N] '."
+        },
+        "loop_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Gate retry iteration. Non-parallel: the step's retry count. Parallel: max over branches."
+        },
+        "branch_results": {
+            "type": "array",
+            "description": "Legacy per-branch mirror derived from `branches` on every recompute (parallel only) — retained for pre-v2 consumers until they migrate.",
+            "items": {
+                "type": "object",
+                "required": ["branch_index", "passed", "checks", "failures", "details"],
+                "additionalProperties": false,
+                "properties": {
+                    "branch_index": { "type": "integer", "minimum": 0 },
+                    "passed": { "type": "boolean" },
+                    "checks": { "type": "integer", "minimum": 0 },
+                    "failures": { "type": "integer", "minimum": 0 },
+                    "details": { "type": "array", "items": { "type": "string" } }
+                }
+            }
+        },
+        "source": {
+            "const": "engine-inline",
+            "description": "Top-level writer marker — stamped ONLY by the engine-inline writer, so step_collect_result can distinguish its own earlier artifact from a hook verdict. Absent on hook writes = trusted."
+        }
+    }
+}

@@ -1,0 +1,6 @@
+
+# Riglane — visibility overrides
+# Make workflow engine files visible to Cursor despite .gitignore
+!.acp/
+!.cursor/
+!.mcp.json

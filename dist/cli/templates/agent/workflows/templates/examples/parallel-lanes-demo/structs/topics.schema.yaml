@@ -1,0 +1,19 @@
+name: topics
+description: The shared research-topics plan both lanes consume.
+version: 1
+type: object
+required:
+  - total
+  - topics
+properties:
+  total:
+    type: integer
+  topics:
+    type: array
+    min_items: 1
+    items:
+      type: object
+      required: [id, title]
+      properties:
+        id: { type: integer }
+        title: { type: string }

@@ -1,0 +1,17 @@
+name: organized
+description: >
+  Contract for the planning child's final substep (promoted into the parent
+  run as data/organized.json).
+version: 1
+type: object
+required:
+  - request
+  - groups
+  - note
+properties:
+  request:
+    type: string
+  groups:
+    type: object
+  note:
+    type: string

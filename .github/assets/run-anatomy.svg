@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="330" viewBox="0 0 880 330" role="img" aria-label="Anatomy of a run: the workflow definition drives the engine; steps pass through gates; everything is recorded in the trace; a human gate delivers its question to the Inbox and the run waits for the answer.">
+  <rect width="880" height="330" rx="14" fill="#f4f2ec"/>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#6b6455"/>
+    </marker>
+  </defs>
+
+  <!-- workflow.yaml -->
+  <rect x="10" y="126" width="150" height="58" rx="10" fill="#fbfaf6" stroke="#d8d2c4"/>
+  <text x="85" y="151" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="14" font-weight="700" fill="#26221a">workflow.yaml</text>
+  <text x="85" y="169" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#6b6455">declared steps + gates</text>
+
+  <path d="M160 155 h28" stroke="#6b6455" stroke-width="2" marker-end="url(#a)"/>
+
+  <!-- engine box (amber) -->
+  <rect x="198" y="52" width="462" height="196" rx="12" fill="none" stroke="#a06b2a" stroke-width="1.6" stroke-dasharray="7 5"/>
+  <text x="212" y="42" font-family="ui-monospace,Consolas,monospace" font-size="12" font-weight="700" fill="#a06b2a">THE ENGINE OWNS THE CONTROL FLOW</text>
+
+  <!-- steps -->
+  <g font-family="ui-monospace,Consolas,monospace" font-size="13" font-weight="600" fill="#26221a" text-anchor="middle">
+    <rect x="230" y="128" width="96" height="52" rx="10" fill="#fbfaf6" stroke="#d8d2c4"/>
+    <text x="278" y="151">step</text>
+    <text x="278" y="168" font-size="10.5" font-weight="400" fill="#6b6455">an agent works</text>
+    <rect x="378" y="128" width="104" height="52" rx="10" fill="#fbfaf6" stroke="#d8d2c4"/>
+    <text x="430" y="151">step</text>
+    <text x="430" y="168" font-size="10.5" font-weight="400" fill="#6b6455">isolated subagent</text>
+    <rect x="534" y="128" width="96" height="52" rx="10" fill="#fbfaf6" stroke="#d8d2c4"/>
+    <text x="582" y="151">step</text>
+    <text x="582" y="168" font-size="10.5" font-weight="400" fill="#6b6455">human-gated</text>
+  </g>
+
+  <!-- one continuous arrow between steps; the gate bar lies across it -->
+  <g stroke="#6b6455" stroke-width="2">
+    <path d="M326 154 h42" marker-end="url(#a)"/>
+    <path d="M482 154 h42" marker-end="url(#a)"/>
+  </g>
+  <g stroke="#26221a" stroke-width="4" stroke-linecap="round">
+    <line x1="350" y1="136" x2="350" y2="172"/>
+    <line x1="506" y1="136" x2="506" y2="172"/>
+  </g>
+  <g font-family="ui-monospace,Consolas,monospace" font-size="10.5" fill="#6b6455" text-anchor="middle">
+    <text x="350" y="118">gate: schema +</text>
+    <text x="350" y="194">script verdict</text>
+    <text x="506" y="118">gate</text>
+  </g>
+
+  <text x="437" y="230" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11.5" fill="#a06b2a" font-weight="700">a step cannot be stamped complete unless its gate actually passed</text>
+
+  <!-- trace -->
+  <rect x="700" y="52" width="152" height="58" rx="10" fill="#fbfaf6" stroke="#d8d2c4"/>
+  <text x="776" y="77" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="13" font-weight="700" fill="#26221a">trace</text>
+  <text x="776" y="94" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="10.5" fill="#6b6455">every step, call, verdict</text>
+  <path d="M648 100 C 668 92, 680 86, 696 80" stroke="#6b6455" stroke-width="1.8" fill="none" marker-end="url(#a)"/>
+
+  <!-- inbox (amber, matching the inbox figure) -->
+  <rect x="700" y="134" width="152" height="58" rx="10" fill="#f3e9d2" stroke="#a06b2a" stroke-width="1.4"/>
+  <text x="776" y="159" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="13" font-weight="700" fill="#7a5a22">Inbox</text>
+  <text x="776" y="176" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="10.5" fill="#7a5a22" opacity="0.85">the question, durably</text>
+  <path d="M634 154 h58" stroke="#a06b2a" stroke-width="2" marker-end="url(#a)"/>
+
+  <!-- human -->
+  <circle cx="776" cy="248" r="22" fill="#fbfaf6" stroke="#26221a" stroke-width="2"/>
+  <path d="M776 240 a5.5 5.5 0 1 1 -.01 0 M764 260 a12.5 12.5 0 0 1 24 0" fill="none" stroke="#26221a" stroke-width="2.2"/>
+  <path d="M776 196 v26" stroke="#6b6455" stroke-width="1.8" marker-end="url(#a)"/>
+  <path d="M754 244 C 700 250, 664 226, 640 192" stroke="#6b6455" stroke-width="1.8" stroke-dasharray="5 4" fill="none" marker-end="url(#a)"/>
+
+  <!-- bottom captions, one aligned baseline -->
+  <text x="330" y="308" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#948c7a">one run · state on disk · survives crashes, restarts and closed terminals</text>
+  <text x="740" y="308" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#948c7a">the answer resumes the run — hours or days later</text>
+</svg>

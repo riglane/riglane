@@ -1,0 +1,10 @@
+name: words
+description: planning-demo seed dataset
+version: 1
+type: object
+required:
+  - words
+properties:
+  words:
+    type: array
+    min_items: 5

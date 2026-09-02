@@ -1,0 +1,150 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# spec-capabilities-demo — reference + self-test workflow for the per-step SPEC
+# capability flags: spec_check (CONSUME specs) and spec_authoring (WRITE specs).
+#
+# What it demonstrates (read top-to-bottom as a tutorial):
+#   1. spec_check: true         — the CONSUMPTION capability, for steps that
+#                                modify the project: whitelists spec_search +
+#                                spec_link (per-step tool whitelist), injects consumption
+#                                guidance at step_begin (discover → honor →
+#                                STOP on conflict → spec_link what you touched),
+#                                and adds a spec-compliance clause to the
+#                                semantic gate. Default is OFF — declare it
+#                                only on steps that change code/config.
+#   2. spec_authoring: validate — the DRY-RUN authoring mode: the step may call
+#                                spec_write ONLY with dry_run: true (the engine
+#                                HARD-REJECTS persisting calls from a validate
+#                                step) and writes its own preview report. Note
+#                                it declares its own output — NOT .riglane/specs
+#                                paths (dry-run writes no spec files).
+#   3. spec_authoring: persist  — the REAL authoring mode: spec_write mints the
+#                                id, validates pre- and post-mint, dedups
+#                                against the index, and maintains _index.json
+#                                atomically. The engine AUTO-DECLARES the
+#                                .riglane/specs/** outputs for the gate — do not
+#                                hand-write them. Persist REQUIRES the workflow
+#                                to carry a `scope` param (load-time rule) and
+#                                is incompatible with parallel: true.
+#   4. Engine-owned spec files  — specs, _index.json and _registry.json are
+#                                written ONLY via spec_write/spec_link — never
+#                                by hand (file-guard hard-blocks manual edits).
+#
+# PREREQUISITE: a project with the spec system bootstrapped (.riglane/specs/ —
+# `riglane init` creates it). Uses the ACTIVE scope via the {scope} param
+# (default "generic", always present).
+#
+# Run:  /riglane-run-workflow spec-capabilities-demo
+# Full semantics: workflow_learn(topic="spec-check"), topic "spec-tools",
+# topic "spec-format", topic "scopes".
+# ─────────────────────────────────────────────────────────────────────────────
+name: spec-capabilities-demo
+version: 1
+description: >
+  Reference and self-test workflow for the spec capability flags. Drafts one
+  demo behavioral rule, previews it under spec_authoring: validate (dry-run —
+  dedup verdict, no writes), persists it under spec_authoring: persist (real
+  spec_write mint into the {scope} scope), then exercises spec_check
+  consumption: a code-touching step that discovers the spec, honors it, and
+  registers its file via spec_link.
+
+params:
+  - name: scope
+    description: >
+      Spec scope to author into — "generic" is always present; pass a declared
+      scope id to demo scoped authoring. REQUIRED by the persist step's
+      load-time rule (an unresolved {scope} would degrade to a glob).
+    required: false
+    default: "generic"
+
+gate:
+  structural: true
+  semantic: false
+  human: false
+  max_gate_retries: 2
+  max_step_retries: 1
+
+steps:
+  # ── Step 1: draft the rule (no spec capability needed — just a file) ───────
+  - name: draft-rule
+    goal: >
+      Draft ONE demo behavioral rule for this project. Write data/rule.json
+      with fields: domain ("demo"), title (short), rule_statement (ONE
+      testable MUST sentence about a fictional demo timer — e.g. pausing it
+      during a fictional restore), and applies_to (array with one area
+      string). One rule only — one spec per behavioral requirement.
+    subagent: true
+    spec_check: false
+    outputs:
+      - path: data/rule.json
+        struct: rule-draft
+
+  # ── Step 2: PREVIEW under spec_authoring: validate (dry-run only) ──────────
+  # The engine stamps this step's mode into the manifest: a persisting
+  # spec_write call from here is rejected by construction. Note the OWN
+  # report output — never .riglane/specs paths in validate mode.
+  - name: preview-spec
+    goal: >
+      Preview the drafted rule as a spec WITHOUT persisting anything. Call
+      spec_write with op: create, dry_run: true, using data/rule.json's
+      fields (scope: "{scope}"). Record the outcome in data/preview.json:
+      fields verdict ("clean", "held" or "error"), dedup_note (one sentence —
+      any near-duplicates the engine nominated?), and would_mint (the spec_id
+      shape the engine would assign, or null). Do NOT call spec_write without
+      dry_run here — the engine rejects it for a validate step.
+    subagent: true
+    spec_check: false
+    spec_authoring: validate
+    inputs:
+      - path: data/rule.json
+        inject: file
+    outputs:
+      - path: data/preview.json
+        struct: preview
+
+  # ── Step 3: PERSIST under spec_authoring: persist ───────────────────────────
+  # The engine auto-declares the .riglane/specs/** gate outputs for this step —
+  # declare only your own report. Requires the workflow's `scope` param.
+  - name: persist-spec
+    goal: >
+      Persist the previewed rule: call spec_write with op: create (NO dry_run)
+      using data/rule.json's fields (scope: "{scope}"). If the engine HOLDs
+      (near-certain duplicate from a previous demo run), resolve per its
+      instructions — acknowledge as distinct ONLY if it truly is; otherwise
+      reuse the existing spec_id. Then write data/persisted.json: fields
+      spec_id (the minted or reused id) and action ("created" or "reused").
+    subagent: true
+    spec_check: false
+    spec_authoring: persist
+    inputs:
+      - path: data/rule.json
+        inject: file
+      - path: data/preview.json
+        inject: file
+    outputs:
+      - path: data/persisted.json
+        struct: persisted
+
+  # ── Step 4: CONSUME under spec_check (the everyday flag) ───────────────────
+  # A code-touching step: discover specs for the area, honor them, link what
+  # you touched. This is the flag most real workflows need.
+  - name: apply-spec
+    goal: >
+      Simulate a code change that must respect the persisted spec. (1) Use
+      spec_search to find the spec from data/persisted.json (search its
+      domain "demo"). (2) Read the spec file at the path the search returns
+      and quote its Rule Statement. (3) Write data/demo-timer.md — a short
+      fictional implementation note (5-10 lines) that explicitly HONORS the
+      rule (state how). (4) Register the linkage: spec_link with op: add,
+      the spec_id, file data/demo-timer.md is NOT project source — link the
+      spec to THIS demo file anyway to exercise the call, role "uses", and a
+      one-line note. (5) Summarize in data/consume-report.json: fields
+      spec_id, honored (boolean), and how (one sentence).
+    subagent: true
+    spec_check: true
+    inputs:
+      - path: data/persisted.json
+        inject: file
+    outputs:
+      - path: data/demo-timer.md
+      - path: data/consume-report.json
+        struct: consume-report

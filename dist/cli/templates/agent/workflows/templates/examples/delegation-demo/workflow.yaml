@@ -1,0 +1,126 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# delegation-demo — reference + self-test workflow for the delegate_to
+# mechanism (the "A" of a minimal A→B delegation pair; "B" is the sibling
+# examples/delegation-demo-target).
+#
+# What it demonstrates (read this file top-to-bottom as a tutorial):
+#   1. delegate_to          — a step that hands off to ANOTHER workflow.
+#                             Delegation is orchestrator-driven, so
+#                             subagent: false is MANDATORY. step_begin returns
+#                             a delegation envelope (type: delegation +
+#                             resolved_params) instead of a subagent prompt;
+#                             the ORCHESTRATOR then runs the target directly:
+#                             workflow_init(target, resolved_params) → all its
+#                             steps → workflow_finalize(target) →
+#                             step_complete on THIS step (include
+#                             delegated_run_id — the child's run_id — for a
+#                             deterministic resolve; the engine also
+#                             auto-links the child init as a fallback).
+#   2. params (INTO child)  — the `params:` block passes values TO the
+#                             delegated workflow; {component} resolves from
+#                             THIS workflow's params first.
+#   3. param_bindings (OUT) — SCALARS out of the child: on a delegation step,
+#                             bindings read from the DELEGATED child's own run
+#                             dir; the child's data/analysis.json::verdict
+#                             lands in the parent's {verdict} param.
+#   4. from_delegated (OUT) — FILES out of the child (artifact handoff): the
+#                             child's details file is named with the CHILD's
+#                             dynamic run_id, so it cannot be declared here
+#                             statically. from_delegated names the source in
+#                             the CHILD's run dir ({param} resolves against
+#                             the CHILD's params); at step_complete the
+#                             engine copies it to this step's `path` (a
+#                             concrete parent-side destination) where it
+#                             validates like any normal output. Later steps
+#                             then read the STATIC parent path — NEVER hunt
+#                             for child files via globs over workflow_runs/.
+#   5. Inline synthesis     — a subagent: false step consumes {verdict} AND
+#                             the collected details file (a plain static
+#                             input).
+#
+# TRACE: the delegated child runs as its OWN run (separate manifest + trace),
+# but the parent's trace embeds the child's steps as an amber block between
+# "→ delegated: …" / "← return from …" dividers — the whole execution reads
+# as ONE trace in the trace viewer.
+#
+# RULES: the target uses its OWN gate config — the parent's gate is NOT
+# inherited (engine behavior). Depth is capped at ONE level (A→B OK, A→B→C
+# prohibited) and circular delegation (A→B→A) must be aborted — but these two
+# are BINDING AUTHORING/PROCEDURAL rules for static workflows, not load-time
+# engine checks: the engine hard-enforces depth only inside planning-drafted
+# children (allow_delegation), and the circular check is the orchestrator's
+# own step in the run procedure. Do not rely on the engine to reject a deep
+# or circular chain.
+#
+# NOTE — params vs param_bindings vs from_delegated (often confused):
+#   params:          values INTO the delegated workflow (delegation-only field).
+#   param_bindings:  scalar values OUT of step outputs into workflow params.
+#   from_delegated:  FILES out of the delegated child's run dir (handoff).
+#
+# Run:  /riglane-run-workflow delegation-demo
+# Full semantics: workflow_learn(topic="delegation").
+# ─────────────────────────────────────────────────────────────────────────────
+name: delegation-demo
+version: 1
+description: >
+  Reference and self-test workflow for the delegate_to mechanism. Delegates
+  the analysis of one demo component to the delegation-demo-target workflow
+  (params flow INTO the child), pipes the child's verdict back out via
+  param_bindings (scalars OUT), collects the child's dynamically-named
+  details file via from_delegated (artifact handoff), then writes a short
+  report inline.
+
+params:
+  - name: component
+    description: Name of the demo component the delegated workflow analyzes.
+    required: false
+    default: demo-widget
+
+steps:
+  # ── Step 1: the delegation step ─────────────────────────────────────────────
+  # subagent: false is REQUIRED — the orchestrator itself runs the target
+  # workflow (init → steps → finalize), then calls step_complete here.
+  # param_bindings read SCALARS from the CHILD's run dir; from_delegated
+  # copies a FILE from the CHILD's run dir to the static parent-side path
+  # below (the {run_id} in the source resolves to the CHILD's run id).
+  - name: analyze-component
+    goal: >
+      Delegate the analysis of component "{component}" to the
+      delegation-demo-target workflow. Run it to completion, then complete
+      this step — the engine extracts the verdict and collects the details
+      file from the child's run.
+    delegate_to: delegation-demo-target
+    subagent: false
+    spec_check: false
+    params:
+      component: "{component}"
+    param_bindings:
+      verdict: "data/analysis.json::verdict"
+    outputs:
+      - path: data/analysis-details.md
+        from_delegated: "data/{run_id}-details.md"
+
+  # ── Step 2: after the delegation — inline synthesis ────────────────────────
+  # {verdict} was extracted by the binding above; the details file was
+  # collected to a STATIC path by the handoff — so this step declares it as a
+  # perfectly ordinary input.
+  - name: report
+    goal: >
+      Write data/report.md — a short summary of the delegation run:
+
+      # delegation-demo report
+
+      - component: {component}
+      - verdict from delegated workflow: {verdict}
+      - details (from the collected data/analysis-details.md): one sentence
+        summarizing them
+      - one sentence: which workflow produced the verdict and where its run
+        dir is (the delegated run has its OWN manifest and trace, embedded
+        as an amber block in this run's trace).
+    subagent: false
+    spec_check: false
+    inputs:
+      - path: data/analysis-details.md
+        inject: reference
+    outputs:
+      - path: data/report.md

@@ -1,0 +1,97 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# gate-hook-check — DIAGNOSTIC INSTRUMENT, not a tutorial.
+#
+# Run this to verify the HOST WIRING after an install/upgrade or when gates
+# behave strangely (a hook that fails open silently removes
+# every guarantee). Three probes, each answering one question:
+#   1. probe-hook   — does the SubagentStop gate hook fire AT ALL on this host?
+#   2. probe-struct — does the hook run struct validation on outputs?
+#   3. probe-retry  — does the in-session retry loop deliver gate feedback?
+#
+# Where to look after a run: .riglane/gate-check-invocations.log,
+# .riglane/gate-check-error.log, the run's gate-result.json and trace.json.
+#
+# To LEARN the gate mechanics (structural/semantic/human, retry budgets),
+# use the tutorial instead: examples/gates-demo + workflow_learn(topic="gate").
+# ─────────────────────────────────────────────────────────────────────────────
+name: gate-hook-check
+version: 3
+description: >
+  Fast diagnostic workflow — tests whether the host's subagentStop gate hook
+  fires correctly, the gate hook processes input, and the trace system
+  captures data. 3 lightweight steps, each testing a different scenario.
+  After running, check:
+    .riglane/gate-check-invocations.log  (was the hook invoked?)
+    .riglane/gate-check-error.log        (did the gate hook error?)
+    gate-result.json                   (was structural validation run?)
+    trace/                             (was trace data captured?)
+
+params:
+  - name: message
+    description: A short message for the subagent to echo back.
+    required: false
+    default: "hook-diagnostic test"
+
+gate:
+  structural: true
+  semantic: false
+  human: false
+  max_gate_retries: 2
+  max_step_retries: 1
+
+steps:
+  # Step 1: Minimal — does the hook fire at all?
+  # No outputs, no struct validation. If the gate hook fires,
+  # it will log to invocations.log and write a trace entry.
+  - name: probe-hook
+    goal: >
+      This is a diagnostic step. Do ONE thing: write a single line
+      to data/probe-result.txt containing the current timestamp.
+      Nothing else. Do not read any files. Do not analyze anything.
+    subagent: true
+    spec_check: false
+    outputs:
+      - path: data/probe-result.txt
+    gate:
+      structural: true
+      semantic: false
+      human: false
+
+  # Step 2: Struct validation — does the gate hook validate output schemas?
+  # Has a struct schema, so the gate hook must find and validate it.
+  - name: probe-struct
+    goal: >
+      Write a valid JSON file to data/diagnostic-output.json matching the
+      `diagnostic-output` struct schema shown in your task's Outputs section
+      (the engine includes it inline — you do NOT need to read a schema file).
+      Write a minimal valid file.
+    subagent: true
+    spec_check: false
+    outputs:
+      - path: data/diagnostic-output.json
+        struct: diagnostic-output
+    gate:
+      structural: true
+      semantic: false
+      human: false
+
+  # Step 3: Intentional failure — does the retry loop work?
+  # Subagent is told to write INVALID output. Gate should fail,
+  # subagent should get followup_message with failure details,
+  # and retry. On retry, write valid output.
+  - name: probe-retry
+    goal: >
+      FIRST ATTEMPT: Write an INTENTIONALLY INVALID JSON file to
+      data/retry-test.json — write {"invalid": true} (missing required fields).
+      AFTER RECEIVING GATE FEEDBACK: write a VALID file matching the
+      `retry-test` struct schema shown in your task's Outputs section (provided
+      inline by the engine — no schema file to read).
+    subagent: true
+    spec_check: false
+    outputs:
+      - path: data/retry-test.json
+        struct: retry-test
+    gate:
+      structural: true
+      semantic: false
+      human: false

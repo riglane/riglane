@@ -1,0 +1,20 @@
+name: module-audit
+description: One branch's audit result in parallel-demo
+version: 1
+type: object
+required:
+  - module
+  - name
+  - issues_found
+  - verdict
+properties:
+  module:
+    type: string
+  name:
+    type: string
+  issues_found:
+    type: integer
+    minimum: 0
+    maximum: 5
+  verdict:
+    type: string

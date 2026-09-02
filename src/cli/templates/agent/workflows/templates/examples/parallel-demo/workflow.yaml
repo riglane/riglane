@@ -1,0 +1,146 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# parallel-demo — reference + self-test workflow for the PARALLEL fan-out
+# mechanism, including its three subtle spots (the ones authors get wrong).
+#
+# What it demonstrates (read top-to-bottom as a tutorial):
+#   1. parallel_key + FILTER   — `manifest.modules[status=pending]` fans out one
+#                                branch PER PENDING ITEM. Skipping "done" items
+#                                is the FILTER's job — never goal-text logic;
+#                                a later run with fewer pending items just fans
+#                                out fewer branches, the step never changes.
+#   2. BRANCH IDENTITY          — each branch's output path must differ. The
+#                                per-branch value comes from the ITEM:
+#                                {parallel_key.name} — NOT a workflow {param}
+#                                (one value for all branches → collision).
+#                                THE TRAP: item fields containing separators
+#                                ("src/core/main.js") are INVALID as path
+#                                identity — that is why the manifest step below
+#                                derives a filesystem-safe `name` PER ITEM and
+#                                the outputs use {parallel_key.name}, never
+#                                {parallel_key.path}. Alternatives: {} = an
+#                                explicit branch-index slot; a bare glob
+#                                (data/audits/*.json) lets the engine isolate
+#                                and merge flat.
+#   3. MERGE + CONSUMPTION      — branches write into engine-isolated
+#                                _branch_N/ scaffolds (never write a literal
+#                                _branch_* yourself — load-time error); at
+#                                step_complete the engine merges them up, and
+#                                the consolidate step reads them with ONE glob.
+#   4. parallel_spawn_delay_ms  — staggers branch spawns so the first populates
+#                                the prompt cache (worth it from ~5 branches /
+#                                large prompts; here it is small on purpose).
+#
+# As a TEST INSTRUMENT, a full run exercises: parallel_key JSONPath + filter,
+# per-branch prompt files, branch snapshots + per-branch gate validation,
+# verified branch merge, and glob consumption of merged outputs.
+#
+# Run:  /riglane-run-workflow parallel-demo            (defaults to 3 pending + 1 done)
+# Full semantics: workflow_learn(topic="parallel").
+# ─────────────────────────────────────────────────────────────────────────────
+name: parallel-demo
+version: 1
+description: >
+  Reference and self-test workflow for parallel fan-out. Builds a small module
+  manifest (mixed pending/done items whose paths contain separators), audits
+  ONLY the pending modules in parallel — one branch per item, with
+  filesystem-safe per-branch output identity — then consolidates every
+  per-branch result into one ranked report via a single glob input.
+
+params:
+  - name: pending_modules
+    description: >
+      How many PENDING modules the manifest should contain (one parallel
+      branch each). The manifest always adds one extra "done" module to prove
+      the [status=pending] filter skips it.
+    required: false
+    default: 3
+
+gate:
+  structural: true
+  semantic: false
+  human: false
+  max_gate_retries: 2
+  max_step_retries: 1
+
+steps:
+  # ── Step 1: build the manifest the fan-out feeds on ─────────────────────────
+  # THE IDENTITY LESSON lives here: each item carries BOTH the real path (with
+  # separators — useless as a filename) AND a derived filesystem-safe `name`
+  # the branch outputs key on.
+  # INLINE by design (design-choices lesson): mechanical seeding of exact
+  # content is orchestrator work — no spawn cost, no paraphrase risk.
+  - name: build-manifest
+    goal: >
+      Write data/manifest.json with EXACTLY this content — copy it verbatim,
+      character for character (do not reformat, do not change any status;
+      the final entry's "done" status is the point of the demo — the fan-out
+      filter must skip it):
+
+      {"modules": [
+      {"path": "src/core/module-1.js", "name": "core-module-1", "status": "pending"},
+      {"path": "src/api/module-2.js", "name": "api-module-2", "status": "pending"},
+      {"path": "src/utils/module-3.js", "name": "utils-module-3", "status": "pending"},
+      {"path": "src/legacy/retired.js", "name": "legacy-retired", "status": "done"}
+      ]}
+
+      (If the {pending_modules} param differs from 3, extend/trim the PENDING
+      entries following the same pattern — the final "done" entry stays
+      verbatim, always.) Later steps and the parallel fan-out parse this file
+      mechanically.
+    subagent: false
+    spec_check: false
+    outputs:
+      - path: data/manifest.json
+        struct: module-manifest
+
+  # ── Step 2: the parallel fan-out ─────────────────────────────────────────────
+  # One branch per PENDING item ([status=pending] — the "done" item never runs).
+  # Output identity: {parallel_key.name} — the engine fills each branch's value
+  # from ITS item; the subagent just writes to the concrete path it is handed.
+  - name: audit-module
+    goal: >
+      Audit the single module assigned to this branch (its item is in your
+      branch context: path, name, status). This is a demo — simulate the audit:
+      write the result JSON with fields: module (the item's path), name (the
+      item's name), issues_found (an integer 0-5 you pick), and verdict (one
+      short sentence). Write it to the exact output path shown in your Outputs
+      section — the engine has already resolved this branch's distinct path.
+    subagent: true
+    spec_check: false
+    parallel: true
+    parallel_key: "manifest.modules[status=pending]"
+    # Small here (3 branches, tiny prompts) — shown for the mechanism; raise to
+    # 3000-5000 when branches are many and prompts are large (prompt-cache win).
+    parallel_spawn_delay_ms: 1000
+    outputs:
+      - path: "data/audits/{parallel_key.name}-audit.json"
+        struct: module-audit
+
+  # ── Step 3: consolidate — ONE glob reads every merged branch result ─────────
+  # Inline synthesis: after the engine merges _branch_N/ scaffolds up, the
+  # per-branch files all live under data/audits/.
+  - name: consolidate
+    goal: >
+      Consolidate the audit. Read every data/audits/*-audit.json file and
+      data/manifest.json, then write data/report.md:
+
+      # parallel-demo report
+
+      | module | name | issues | verdict |
+      |---|---|---|---|
+      (one row per audited module, sorted by issues_found DESCENDING — worst first)
+
+      Footer lines:
+      - "audited: <count of audit files> of <total manifest entries> modules"
+      - one sentence confirming the "done" module was SKIPPED by the
+        [status=pending] filter (it must have no audit file).
+    subagent: false
+    spec_check: false
+    carry_forward: true
+    inputs:
+      - path: data/audits/*-audit.json
+        inject: reference
+      - path: data/manifest.json
+        inject: reference
+    outputs:
+      - path: data/report.md

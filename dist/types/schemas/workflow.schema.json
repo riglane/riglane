@@ -1,0 +1,774 @@
+{
+    "$schema": "https://json-schema.org/draft-07/schema#",
+    "$id": "riglane-workflow-v1",
+    "title": "Riglane Workflow YAML",
+    "description": "Schema for workflow.yaml files in Riglane. Defines the structure of a workflow definition: top-level metadata, params, gate config, tools, and steps.",
+    "type": "object",
+    "required": [
+        "name",
+        "version",
+        "description",
+        "steps"
+    ],
+    "additionalProperties": false,
+    "properties": {
+        "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]*$",
+            "description": "Unique workflow identifier. Lowercase, starts with letter; letters, digits, hyphens, underscores. Doubles as the directory name under templates/predefined/ or templates/my_workflows/, and as the prefix for tool names (<workflow>__<tool>)."
+        },
+        "version": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Integer version of this workflow definition. Bumped when the structure changes (added/removed steps, changed gate config, etc.). Recorded in trace and manifest."
+        },
+        "description": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Human-readable purpose of the workflow. Shown in CLI listings and embedded in trace metadata."
+        },
+        "acknowledge_warnings": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "Lint-warning ids the author DELIBERATELY accepts (e.g. ['empty-default']). Suppresses the matching advisory warning at workflow_validate / riglane validate-workflow. Workflow-level entries suppress ALL instances of that id; prefer step-level acknowledge_warnings for step-scoped warnings so the intent stays local."
+        },
+        "params": {
+            "type": "array",
+            "description": "Optional. User-provided arguments at workflow invocation time. Resolved at workflow_init; available to step goals via {param_name} placeholders.",
+            "items": {
+                "type": "object",
+                "required": [
+                    "name"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$",
+                        "description": "Parameter name. Lowercase identifier. Used in goal text and by orchestrator for {placeholder} substitution."
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Human-readable purpose. Shown when prompting user for the param."
+                    },
+                    "required": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "If true, workflow_init fails when this param is not provided AND no default is set."
+                    },
+                    "default": {
+                        "description": "Default value if user does not supply this param. May be any JSON-compatible type. Presence of 'default' implies the param is effectively optional even if 'required: true' is also set."
+                    }
+                }
+            }
+        },
+        "gate": {
+            "type": "object",
+            "description": "Optional. Workflow-level default gate configuration. Each step inherits these values unless it provides a step-level gate override.",
+            "additionalProperties": false,
+            "properties": {
+                "structural": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Enable structural validation (file existence, schema compliance, write-proof). Runs via the riglane gate-check SubagentStop hook."
+                },
+                "semantic": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Enable LLM-based semantic validation. Orchestrator evaluates output coherence/quality."
+                },
+                "human": {
+                    "default": false,
+                    "description": "Require human approval before proceeding to the next step. Orchestrator pauses and asks user. Boolean, or {script} for a conditional gate: the engine runs the command at gate time (after the step's outputs exist) and it must print {\"human\": true|false} to stdout — true means this step needs human approval on this run.",
+                    "oneOf": [
+                        { "type": "boolean" },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "script": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "description": "Shell command run by the engine from the project root at gate time. MUST exit 0 and print {\"human\": true|false} as JSON to stdout; anything else stops the workflow."
+                                }
+                            },
+                            "required": ["script"],
+                            "additionalProperties": false
+                        }
+                    ]
+                },
+                "human_channel": {
+                    "enum": [
+                        "terminal",
+                        "external",
+                        "both"
+                    ],
+                    "default": "terminal",
+                    "description": "Where the human-gate question is delivered. 'terminal' = today's in-harness dialog. 'external' = a structured, engine-validated message in the run inbox (Agent Messages UI / trace dialog / webhook push); the answer is a durable record and step_complete REFUSES until it exists. 'both' = external message plus a terminal ask (a terminal answer is recorded via inbox_respond). Only meaningful with human: true."
+                },
+                "max_step_retries": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 3,
+                    "description": "Max times the orchestrator may re-spawn a fresh subagent for a step after gate failures. Resets context each time."
+                },
+                "max_gate_retries": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 5,
+                    "description": "Max gate-hook loops within a single subagent session. Subagent receives followup messages and may self-correct in place. Cursor host has a hard ceiling of 25 as a safety net."
+                },
+                "allow_partial_step_complete": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "When false (default), engine blocks step_complete if a parallel step has failed branches that have not been recovered. Hard rule (NOT overridable by this flag): engine always blocks step_complete when ALL parallel branches failed (catastrophic) or a non-parallel step's last gate-check failed. Set true only on workflows where partial parallel completion is intentional (e.g. validation steps with optional branches)."
+                }
+            }
+        },
+        "parallel_spawn_delay_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Optional. Workflow-level default delay in milliseconds between first and subsequent parallel-subagent spawns. Applies to every step where parallel=true unless that step overrides it. Reduces prompt-cache misses by letting the first subagent populate cache before others spawn. Default: 0 (simultaneous spawn). Recommended: 3000-5000ms for typical 100K-300K prompts."
+        },
+        "context": {
+            "type": "object",
+            "description": "Optional. Workflow-level context propagation policy.",
+            "additionalProperties": false,
+            "properties": {
+                "carry_forward": {
+                    "type": "string",
+                    "enum": [
+                        "none",
+                        "summary"
+                    ],
+                    "default": "none",
+                    "description": "What context the next step receives. 'none' = nothing; 'summary' = auto-generated summaries written by previous steps to context/. May be overridden per-step via step.carry_forward (boolean)."
+                }
+            }
+        },
+        "tools": {
+            "type": "array",
+            "description": "Optional. Tool dependencies for this workflow. Two kinds: 'script' (shell commands wrapped as MCP tools by workflow_tools_loader) and 'mcp' (external MCP server availability check).",
+            "items": {
+                "type": "object",
+                "required": [
+                    "name",
+                    "type"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$",
+                        "description": "Unique tool name within this workflow. For script tools, the full MCP tool name becomes mcp__workflow_tools__<workflow>__<tool> (double underscore separators)."
+                    },
+                    "type": {
+                        "type": "string",
+                        "enum": [
+                            "script",
+                            "mcp"
+                        ],
+                        "description": "Tool kind. 'script' = local shell command exposed via the workflow_tools MCP server. 'mcp' = external MCP server dependency."
+                    },
+                    "command": {
+                        "type": "string",
+                        "description": "Script-only. Shell command to execute, using any interpreter (e.g., 'python scripts/extract.py' or 'node scripts/extract.js'). The workflow_tools loader appends '--key=value' arguments derived from input_schema."
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Human-readable description. Required for script tools (shown to LLM as MCP tool description). For MCP tools, omit \u2014 description comes from the MCP server's own tools/list."
+                    },
+                    "input_schema": {
+                        "type": "object",
+                        "description": "Script-only. JSON Schema (Draft-07) for tool arguments. Validated by the workflow_tools loader (when jsonschema is installed) AND by the workflow-tool-validator.py PreToolUse hook in Claude Code."
+                    },
+                    "required": {
+                        "type": [
+                            "boolean",
+                            "null"
+                        ],
+                        "default": true,
+                        "description": "What 'required' actually gates (D-2 audit fix): for SCRIPT tools (default false) \u2014 workflow_init blocks when the tool is detectably missing (probed only for python/python3 commands whose script file is absent; other interpreters are assumed available). For MCP tools (default true) \u2014 availability CANNOT be probed at init (always reported with needs_verification); 'required' instead gates the post-step 'declared tool was never called' warning (falsy suppresses it). Explicit YAML null is tolerated (Python-parity: treated as absent \u2192 default applies)."
+                    },
+                    "expected_tools": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "MCP-only. Lists the specific tool names from this server that workflow steps will call. Required for per-step subagent whitelist generation in Claude Code (init-workflow.py writes mcp__<server>__<tool> entries to AGENT.md)."
+                    },
+                    "server_config": {
+                        "type": "object",
+                        "description": "MCP-only. Optional, kept for compatibility. Server registration in Phase 38 happens in .mcp.json \u2014 this block is not used by current loader.",
+                        "additionalProperties": false,
+                        "properties": {
+                            "command": {
+                                "type": "string"
+                            },
+                            "args": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                },
+                "allOf": [
+                    {
+                        "$comment": "Script tools must declare a command (the actual subprocess to run). Description is recommended but not required for Python-parity \u2014 engine omits empty/missing descriptions from MCP tool registration.",
+                        "if": {
+                            "properties": {
+                                "type": {
+                                    "const": "script"
+                                }
+                            }
+                        },
+                        "then": {
+                            "required": [
+                                "command"
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        "steps": {
+            "type": "array",
+            "minItems": 1,
+            "description": "Ordered list of workflow steps. Each step runs in sequence (or in parallel if step.parallel is true). At least one step is required.",
+            "items": {
+                "$ref": "#/definitions/step"
+            }
+        },
+        "inbox_webhook": {
+            "type": "string",
+            "pattern": "^https?://",
+            "description": "Default inbox webhook URL for this workflow's runs (the engine POSTs the question envelope there). Run-level overrides win; ambient env/config fill in when absent."
+        }
+    },
+    "definitions": {
+        "step": {
+            "type": "object",
+            "required": [
+                "name"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_-]*$",
+                    "description": "Unique step name within this workflow. Used as the key in manifest.steps and trace.steps[].name. Also used for per-step subagent identifiers (<workflow>-<step>)."
+                },
+                "goal": {
+                    "type": "string",
+                    "description": "Prompt for the subagent describing what to accomplish. Required unless 'delegate_to' is set. Supports {param} placeholders."
+                },
+                "subagent": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "If true (default), the step runs in an isolated subagent (Claude Code Agent / Cursor task). If false, the step runs inline by the orchestrator. Inline steps skip the gate hook and have no per-step trace invocations. Delegation steps (with delegate_to) MUST set this to false."
+                },
+                "acknowledge_warnings": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "description": "Lint-warning ids the author DELIBERATELY accepts for this step (e.g. ['no-outputs']). Suppresses the matching advisory warning at workflow_validate / riglane validate-workflow while keeping the intent visible in the YAML for human reviewers."
+                },
+                "spec_check": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "If true (default false, opt-in \u2014 D3), the step gets spec CONSUMPTION capability: spec_search/spec_link whitelisted (CC per-step) + consumption guidance at step_begin + spec-compliance clause at the semantic gate. Declare on steps that modify the project."
+                },
+                "spec_authoring": {
+                    "type": "string",
+                    "enum": [
+                        "persist",
+                        "validate"
+                    ],
+                    "description": "Spec AUTHORING capability (absent = off). Both modes whitelist spec_write/spec_search/spec_link (CC per-step) and inject authoring guidance at step_begin. 'persist' = the step writes specs (spec_write op:create/create_batch). 'validate' = dry-run preview only (spec_write with dry_run:true); declare your own report output, NOT .riglane/specs paths (dry-run writes nothing \u2014 a manual .riglane/specs output would fail write_proof)."
+                },
+                "tools": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "description": "Optional. Declares which workflow-level tools this step uses \u2014 the step is granted EXACTLY this subset. Names must match top-level tools[].name (an unknown name is a load error). If omitted (or an empty list), the step gets NO workflow tools: a tool must be declared to be granted."
+                },
+                "branch_profiles": {
+                    "type": "object",
+                    "minProperties": 1,
+                    "propertyNames": {
+                        "pattern": "^[a-z][a-z0-9_]*$"
+                    },
+                    "additionalProperties": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "tools": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "description": "The profile's workflow-tool subset \u2014 MUST be a subset of the step's own tools: list (the step grant is the union the workflow_tools server enforces; branch identity never reaches the tool call, so the server cannot enforce narrower than the union \u2014 a stated seam). Absent/[] = this profile's branches call NO workflow tools."
+                            },
+                            "struct": {
+                                "type": "string",
+                                "description": "Struct schema name that replaces the step's struct-bearing output schema for branches running this profile. Requires the step to have EXACTLY ONE struct-bearing output (load error otherwise); the schema file must exist in structs/."
+                            }
+                        }
+                    },
+                    "description": "Parallel steps only. STATIC per-branch rights: each profile names a tool subset (and optionally a struct) for the branches that select it. A parallel_key item selects its profile via its 'profile' field, else its 'name' field; when profiles are declared, EVERY item must resolve to one (branch resolution fails loud otherwise). Profiles are authored, not runtime data, so the per-profile agent artifacts can enforce them by construction on agent-file hosts."
+                },
+                "deny": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "shell"
+                        ]
+                    },
+                    "description": "Optional. Host-neutral capability ids this SUBAGENT step must NOT have (absent or empty = the full native surface, the default). 'shell' removes the harness's shell/terminal tools \u2014 the engine owns the per-host spelling (Bash/PowerShell on Claude Code, bash on OpenCode, execute on Copilot, run_shell_command on Gemini). Enforced via the generated per-step agent definition on the four agent-file hosts; on Cursor/Codex (no per-step agent identity) it is instruction-only \u2014 a stated seam. NOT a sandbox: a step without shell can still write files via its edit tools and reach the network via granted MCP tools. Inert on inline (subagent: false) steps \u2014 the orchestrator is not spawned from an agent definition (lint warns)."
+                },
+                "model": {
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "enum": [
+                        "inherit",
+                        "auto",
+                        "lightest",
+                        "strongest",
+                        null
+                    ],
+                    "description": "Optional. Model selection MODE for the step's subagent \u2014 NOT a model name (authors rarely know the host's internal model identifiers; Riglane is LLM/host-agnostic). 'inherit' = same model as the orchestrator; 'auto' (default when omitted or YAML null) = the orchestrator picks a fitting model itself; 'lightest' = cheapest/fastest tier available; 'strongest' = most capable tier available. Each mode becomes an engine-composed orchestrator instruction on the step_begin envelope."
+                },
+                "parallel": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "If true, fan out into multiple concurrent subagents \u2014 one per item resolved from parallel_key. Requires parallel_key."
+                },
+                "parallel_key": {
+                    "type": "string",
+                    "description": "Required when parallel=true. JSONPath-like expression pointing to an array. Format: <file-stem>.<dot.path>[<key>=<value>]. Example: 'extraction-manifest.tasks[status=pending]'."
+                },
+                "parallel_spawn_delay_ms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Optional. Delay in milliseconds between first and subsequent parallel-subagent spawns. Reduces prompt-cache misses by letting the first subagent populate cache before others spawn. Only applies when parallel=true. Overrides workflow-level default if both are set. Recommended: 3000-5000ms for typical 100K-300K prompts."
+                },
+                "type": {
+                    "type": "string",
+                    "enum": [
+                        "planning"
+                    ],
+                    "description": "Step kind discriminator. Currently only 'planning' is recognized (Phase 61). 'planning' activates the dynamic planning step lifecycle: orchestrator drafts a mini-workflow at runtime, engine validates it via workflow_validate_dynamic, executes it as a generated child workflow under .riglane/workflows/dynamic/."
+                },
+                "max_substeps": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Planning steps only. Max number of substeps the generated child workflow may contain. Default: 7. workflow_validate_dynamic rejects child workflows exceeding this."
+                },
+                "max_plan_attempts": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Planning steps only. Max number of plan-draft attempts the orchestrator may make before engine blocks with BLOCKED_PLANNING_FAILURE. Default: 3. Each workflow_validate_dynamic call bumps the counter regardless of outcome."
+                },
+                "allow_parallel": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Planning steps only. If false (default), generated child workflow MUST NOT contain parallel substeps. Set true to relax the restriction when fan-out is intentional."
+                },
+                "allow_delegation": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Planning steps only. If false (default), generated child workflow MUST NOT contain nested delegation (preserves max-depth-1 invariant). Set true only when nested delegation is intentional."
+                },
+                "inputs": {
+                    "type": "array",
+                    "description": "Optional. Files or data the subagent receives. Resolved by step_begin (supports {param} placeholders and glob patterns).",
+                    "items": {
+                        "type": "object",
+                        "required": [
+                            "path"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "File path. Supports {param} placeholders and glob patterns (*, **, ?). Paths starting with .riglane/, .cursor/, .claude/, .user/ are workspace-root-relative; bare relative paths are workflow-runtime-dir-relative."
+                            },
+                            "inject": {
+                                "type": "string",
+                                "enum": [
+                                    "file",
+                                    "file_if_exists",
+                                    "reference"
+                                ],
+                                "default": "reference",
+                                "description": "How input is delivered. 'file' = embed full content in subagent prompt; 'file_if_exists' = embed if exists else skip silently; 'reference' = mention path only, subagent reads via tools."
+                            },
+                            "struct": {
+                                "type": "string",
+                                "description": "Optional struct schema name for pre-step input validation."
+                            }
+                        }
+                    }
+                },
+                "outputs": {
+                    "type": "array",
+                    "description": "Optional. Files the subagent is expected to produce. Validated by the gate (existence + struct + write_proof).",
+                    "items": {
+                        "type": "object",
+                        "required": [
+                            "path"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "Expected output path. Supports {param} placeholders and globs. Same path-resolution rules as inputs."
+                            },
+                            "struct": {
+                                "type": "string",
+                                "description": "Optional struct schema name for post-step gate validation."
+                            },
+                            "write_proof": {
+                                "type": "string",
+                                "enum": [
+                                    "required",
+                                    "all_members_fresh",
+                                    "any_member",
+                                    "off"
+                                ],
+                                "description": "Write-proof mode. Detects cases where a subagent reports success but did not actually write the declared output file. 'required' = file MUST be touched in this step (default for explicit paths). 'all_members_fresh' = every glob match MUST be touched (default for globs). 'any_member' = at least one glob match must be touched. 'off' = skip write-proof; file still required to exist."
+                            },
+                            "optional": {
+                                "type": "boolean",
+                                "default": false,
+                                "description": "If true and the file is absent, all checks (struct, write_proof) are skipped without failure. If present, all configured checks run normally."
+                            },
+                            "per_iteration": {
+                                "type": "boolean",
+                                "default": false,
+                                "description": "loop_back workflows only. If true, the engine produces a DISTINCT file per loop iteration by injecting the synthetic {iteration} counter into the path before the extension (data/report.json -> data/report_{iteration}.json). Without it the file is overwritten on each iteration (current-state dataflow). Authoring sugar over writing the {iteration} placeholder by hand; ignored (with a validation error) in workflows without loop_back."
+                            },
+                            "from_delegated": {
+                                "type": "string",
+                                "description": "Delegation steps only (requires delegate_to on the step). File-level artifact handoff: source path in the DELEGATED child's run dir. {param} placeholders resolve against the CHILD's params (incl. its synthetic run_id); a glob is allowed but must match EXACTLY ONE file. At step_complete the engine copies the matched child file to `path` (a concrete parent-side destination, no globs), making the handoff a normal validated output of the delegation step (existence + struct). Missing source or multiple matches fail the step; `optional: true` skips instead."
+                            }
+                        }
+                    }
+                },
+                "param_bindings": {
+                    "type": "object",
+                    "description": "Optional. Update workflow params from this step's outputs after the gate passes. Keys are param names; values are 'file::field' references with dot notation for nested fields (no array access). Applied AFTER gate pass \u2014 failed/retried steps do not update params.",
+                    "additionalProperties": {
+                        "type": "string",
+                        "pattern": "^.+::.+$"
+                    }
+                },
+                "carry_forward": {
+                    "type": "boolean",
+                    "description": "Optional. Override workflow-level context.carry_forward for this step. true = force summaries even if workflow is 'none'; false = suppress summaries even if workflow is 'summary'. Omitted = inherit."
+                },
+                "delegate_to": {
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "description": "Optional. Name of another workflow to invoke instead of running this step's goal. Delegated workflow runs with its own manifest and gate config (parent gate is NOT inherited). Max one level of delegation depth \u2014 delegated workflows MUST NOT delegate further. When set (non-empty string), this step MUST also set subagent=false. Explicit YAML null or empty string are tolerated (Python-parity: treated as absent \u2192 no delegation)."
+                },
+                "params": {
+                    "type": "object",
+                    "description": "Optional (only meaningful when delegate_to is set). Params to pass to the delegated workflow. Values support {param} placeholders that resolve from the parent workflow's current params (including param_bindings updates).",
+                    "additionalProperties": true
+                },
+                "gate": {
+                    "type": "object",
+                    "description": "Optional. Per-step override of workflow-level gate config. Fields not provided inherit from workflow-level gate.",
+                    "additionalProperties": false,
+                    "properties": {
+                        "structural": {
+                            "type": "boolean"
+                        },
+                        "semantic": {
+                            "type": "boolean"
+                        },
+                        "human": {
+                            "oneOf": [
+                                { "type": "boolean" },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "script": { "type": "string", "minLength": 1 }
+                                    },
+                                    "required": ["script"],
+                                    "additionalProperties": false
+                                }
+                            ]
+                        },
+                        "human_channel": {
+                            "enum": [
+                                "terminal",
+                                "external",
+                                "both"
+                            ],
+                            "description": "Per-step override of the human-gate delivery channel. See workflow.gate.human_channel."
+                        },
+                        "max_step_retries": {
+                            "type": "integer",
+                            "minimum": 0
+                        },
+                        "max_gate_retries": {
+                            "type": "integer",
+                            "minimum": 0
+                        },
+                        "allow_partial_step_complete": {
+                            "type": [
+                                "boolean",
+                                "null"
+                            ],
+                            "description": "Per-step override of workflow-level allow_partial_step_complete. See workflow.gate.allow_partial_step_complete for semantics. Explicit YAML null is treated as 'value present, explicitly null' which collapses to false (does NOT fall through to workflow-level)."
+                        }
+                    }
+                },
+                "loop_back": {
+                    "type": "object",
+                    "description": "Optional. Engine-evaluated backward repetition: after this step completes AND all gates pass, the engine evaluates `when` conditions and, if they say loop, moves the cursor back to step `to` (resetting statuses of the looped range). Repetition is engine-owned control flow \u2014 the orchestrator only obeys the returned action.",
+                    "additionalProperties": false,
+                    "required": [
+                        "to",
+                        "max_iterations",
+                        "when"
+                    ],
+                    "properties": {
+                        "to": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Target step name. MUST be this step or an EARLIER step (backward only; forward branching is a separate future construct)."
+                        },
+                        "max_iterations": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Hard engine-enforced budget of loop-backs. When exhausted the workflow proceeds forward regardless of `when`."
+                        },
+                        "when": {
+                            "type": "object",
+                            "description": "Loop conditions (navigation, NOT quality gates). All configured deciders must say 'loop' (AND); the first 'proceed' short-circuits. Evaluation order: script -> semantic -> human.",
+                            "additionalProperties": false,
+                            "minProperties": 1,
+                            "properties": {
+                                "script": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "description": "Shell command run by the engine from the project root. MUST print {\"loop\": true|false} as JSON to stdout; non-zero exit or malformed output is an error."
+                                },
+                                "semantic": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "description": "Condition text evaluated by the orchestrator LLM on engine assignment; the decision is returned via step_complete's loop_decision param and recorded by the engine."
+                                },
+                                "human": {
+                                    "type": "boolean",
+                                    "description": "If true, the user decides; the orchestrator relays the question and returns the answer via step_complete's loop_decision param."
+                                },
+                                "human_channel": {
+                                    "enum": [
+                                        "terminal",
+                                        "external",
+                                        "both"
+                                    ],
+                                    "description": "Where the loop question is delivered when human is true: 'terminal' (default), 'external' (a kind: loop_decision message with choices ['loop','proceed'] in the run inbox), or 'both'."
+                                }
+                            }
+                        }
+                    }
+                },
+                "routes": {
+                    "type": "object",
+                    "description": "Optional. Conditional forward routing evaluated in step_complete AFTER all gates pass AND after loop_back resolves to proceed. The engine picks one route by id (or the reserved 'proceed' = take none) from `when`, injects that route's steps into the live run as ordinary steps, moves the cursor into them, and returns to the step following this one when the route is exhausted. Route selection is engine-owned control flow.",
+                    "additionalProperties": false,
+                    "required": [
+                        "when",
+                        "define"
+                    ],
+                    "properties": {
+                        "when": {
+                            "type": "object",
+                            "description": "Routing conditions. Yields a STRING (a route id or 'proceed'), unlike loop_back's boolean. Order: script -> semantic -> human. Without 'human', script and semantic must AGREE; disagreement resolves to 'proceed' (no route) plus a user note. With 'human', the user is the final authority and sees script+semantic as advice.",
+                            "additionalProperties": false,
+                            "minProperties": 1,
+                            "properties": {
+                                "script": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "description": "Shell command run by the engine from the project root. MUST print {\"route\": \"<route-id>\" | \"proceed\"} as JSON to stdout. A non-string route value, an unknown id, non-zero exit, or malformed output is a STOP_WORKFLOW error."
+                                },
+                                "semantic": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "description": "Condition text evaluated by the orchestrator LLM; returns a route id or 'proceed' via step_complete's route_decision param."
+                                },
+                                "human": {
+                                    "type": "boolean",
+                                    "description": "If true, the user picks the route (or 'proceed'); the orchestrator relays script+semantic results as advice and returns the answer via step_complete's route_decision param."
+                                },
+                                "human_channel": {
+                                    "enum": [
+                                        "terminal",
+                                        "external",
+                                        "both"
+                                    ],
+                                    "description": "Where the route question is delivered when human is true: 'terminal' (default), 'external' (a kind: route_decision message with the route ids + 'proceed' as choices in the run inbox), or 'both'."
+                                }
+                            }
+                        },
+                        "define": {
+                            "type": "array",
+                            "minItems": 1,
+                            "description": "Named routes. Each route's steps run as ordinary live steps when the route is selected.",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                    "id",
+                                    "steps"
+                                ],
+                                "properties": {
+                                    "id": {
+                                        "type": "string",
+                                        "pattern": "^[a-z][a-z0-9_-]*$",
+                                        "description": "Unique route identifier (globally unique within the workflow). MUST NOT be the reserved value 'proceed'."
+                                    },
+                                    "steps": {
+                                        "type": "array",
+                                        "minItems": 1,
+                                        "description": "Steps run (in order) when this route is selected. Full step objects \u2014 any type, including nested routes. Step names MUST be globally unique across the workflow.",
+                                        "items": {
+                                            "$ref": "#/definitions/step"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "lanes": {
+                    "type": "object",
+                    "description": "Optional. Parallel execution lanes evaluated in step_complete AFTER all gates pass AND after loop_back resolves to proceed (mutually exclusive with `routes` on the same step - a load rule refuses the combination). The engine registers every lane's steps into the live run, returns ENTER_LANES with the {lane -> first step} map, and admits each live lane's cursor step concurrently. Lanes rejoin at an engine-owned join barrier: the barrier ALWAYS waits for every lane to reach a terminal state (there is no way to cancel live subagents), applies join.require, writes data/<fork-step>-join.json (the collection index: per-lane verdict + declared output paths), and returns the cursor to the step after this one with lanes_exit. Fork is unconditional - there is no `when`; all lanes always run. A lane is a full linear workflow segment: loop_back, routes, planning, parallel fan-out, delegation and param_bindings all work inside it, scoped to the lane.",
+                    "additionalProperties": false,
+                    "required": [
+                        "define"
+                    ],
+                    "properties": {
+                        "define": {
+                            "type": "array",
+                            "minItems": 2,
+                            "description": "The parallel lanes (at least 2 - a single lane is a linear sequence, not a fork). Each lane's steps run as ordinary live steps, concurrently with the other lanes.",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                    "id",
+                                    "steps"
+                                ],
+                                "properties": {
+                                    "id": {
+                                        "type": "string",
+                                        "pattern": "^[a-z][a-z0-9_-]*$",
+                                        "description": "Unique lane identifier (globally unique within the workflow, shared namespace with route ids). MUST NOT be the reserved value 'proceed'."
+                                    },
+                                    "steps": {
+                                        "type": "array",
+                                        "minItems": 1,
+                                        "description": "Steps run (in order) inside this lane. Full step objects - any type, including nested routes, loop_back, planning, parallel, delegation and nested lanes. Step names MUST be globally unique across the workflow. Declared output paths MUST NOT collide with another lane's (load rule: lanes write into the shared run dir).",
+                                        "items": {
+                                            "$ref": "#/definitions/step"
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "join": {
+                            "type": "object",
+                            "description": "The join barrier policy. The barrier itself is engine-owned and is NOT a step: any 'join logic' (merging lane outputs, judging results) belongs to the first ordinary step after this one, which receives the lanes_exit verdicts injected into its prompt and can read data/<fork-step>-join.json.",
+                            "additionalProperties": false,
+                            "properties": {
+                                "require": {
+                                    "enum": [
+                                        "all",
+                                        "any"
+                                    ],
+                                    "description": "'all' (default): every lane must complete; a failed lane blocks (BLOCKED_PARTIAL_FAILURE class - re-drive the lane or abort). 'any': proceed when at least one lane completed; the next step sees which lanes failed in lanes_exit. All lanes failed ALWAYS blocks. NOTE: 'any' never finishes early - the barrier always waits for every lane to reach a terminal state; the policy only changes the verdict."
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "allOf": [
+                {
+                    "$comment": "Either 'goal' or 'delegate_to' must be present.",
+                    "anyOf": [
+                        {
+                            "required": [
+                                "goal"
+                            ]
+                        },
+                        {
+                            "required": [
+                                "delegate_to"
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "$comment": "If parallel=true, parallel_key is required.",
+                    "if": {
+                        "properties": {
+                            "parallel": {
+                                "const": true
+                            }
+                        },
+                        "required": [
+                            "parallel"
+                        ]
+                    },
+                    "then": {
+                        "required": [
+                            "parallel_key"
+                        ]
+                    }
+                },
+                {
+                    "$comment": "If delegate_to is a non-empty string, subagent must be explicitly false (engine constraint to prevent adapter spawning subagent). YAML null and empty string are tolerated as 'no delegation' for Python-parity.",
+                    "if": {
+                        "required": [
+                            "delegate_to"
+                        ],
+                        "properties": {
+                            "delegate_to": {
+                                "type": "string",
+                                "minLength": 1
+                            }
+                        }
+                    },
+                    "then": {
+                        "properties": {
+                            "subagent": {
+                                "const": false
+                            }
+                        },
+                        "required": [
+                            "subagent"
+                        ]
+                    }
+                }
+            ]
+        }
+    }
+}

@@ -1,0 +1,27 @@
+name: work-manifest
+version: 1
+description: >
+  The demo work manifest produced by the `seed` step. Its `items` array is what
+  `process-items` fans out over (parallel_key filters items[status=pending]).
+type: object
+required:
+  - total
+  - items
+properties:
+  total:
+    type: integer
+    description: "Number of work items."
+  items:
+    type: array
+    min_items: 1
+    items:
+      type: object
+      required: [name, status]
+      properties:
+        name:
+          type: string
+          description: "Unique item name, e.g. item-01."
+        status:
+          type: string
+          enum: [pending, done]
+          description: "Processing status; seeded as pending."

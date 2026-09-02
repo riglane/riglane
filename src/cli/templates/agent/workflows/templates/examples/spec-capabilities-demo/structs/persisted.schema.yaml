@@ -1,0 +1,13 @@
+name: persisted
+description: spec-capabilities-demo persisted spec outcome
+version: 1
+type: object
+required:
+  - spec_id
+  - action
+properties:
+  spec_id:
+    type: string
+  action:
+    type: string
+    enum: [created, reused]

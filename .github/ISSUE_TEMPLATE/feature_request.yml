@@ -1,0 +1,57 @@
+name: Feature request
+description: Propose a capability the engine does not have.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Read this first — it will save you writing a proposal that gets declined:
+
+        The engine is deliberately small. **If something can be expressed as a
+        workflow, a script tool, or a decider, that is where it belongs** rather
+        than in the engine. And anything that makes a guarantee weaker in order
+        to make a run easier — skipping the pre-install inspection, auto-trusting
+        shared code, letting a run advance past a failed gate — will not be
+        accepted however convenient it is.
+
+        `CONTRIBUTING.md` lists what gets refused, with reasons.
+
+        Proposals also land better as a **Discussions → Ideas** thread first:
+        the shape usually changes in conversation, and an issue is the right
+        artefact only once it has settled.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do that you currently cannot?
+      description: >
+        Describe the situation, not the feature. The most useful proposals start
+        from a run that went wrong or a workflow that could not be expressed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: current-attempt
+    attributes:
+      label: What did you try, and where did it stop?
+      description: >
+        Which existing mechanism came closest — parallel, loop_back, routes,
+        delegation, planning, a script tool — and what exactly it could not do.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: If you have a shape in mind, sketch it. YAML is fine.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: This cannot reasonably be a workflow, a script tool, or a decider instead.
+          required: true
+        - label: It does not weaken a gate, the trust step, or the pinned-commit guarantee.
+          required: true

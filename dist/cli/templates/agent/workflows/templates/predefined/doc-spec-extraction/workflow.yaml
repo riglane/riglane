@@ -1,0 +1,681 @@
+name: doc-spec-extraction
+version: 8
+description: >
+  Extract behavioral specifications from technical documentation, and
+  incrementally improve the whole spec tree run over run. Performs deep
+  analysis of the source document — requirements may be scattered across
+  sections, interdependent, or implicitly derived — then drafts, validates,
+  and commits specs through the engine's spec tools. Deduplicates against
+  existing specs; the engine mints spec ids and enforces uniqueness by
+  construction. When the target scope already has domains/specs, ANALYZE also
+  proposes domain/spec redesign (split/merge/rename domains, move existing
+  specs) — the corpus grows run over run and a layout that fit N specs may not
+  fit 3N. With consider_reorganize (default on), move/rename proposals the user
+  approves are APPLIED after commit (CURATE per-move gate → APPLY via
+  spec_write); content-edit proposals stay advisory. Output goes to .riglane/specs/
+  for reuse by other workflows.
+
+  This is a generic workflow — works with any documentation source.
+
+params:
+  - name: scope
+    description: >
+      Target scope for extracted specs — "generic" (always available) or a
+      scope id declared in .riglane/specs/_scope-config.json. Specs will be
+      written to .riglane/specs/<scope>/<domain>/. The scope is surfaced in the
+      ANALYZE human gate for confirmation — reject and retry with a
+      different --scope if the resolved value is wrong. Default: "generic"
+      (safe for projects without _scope-config.json). For multi-scope
+      projects, pass the scope id explicitly (--scope <id>) or rely on the
+      active scope (resolved via .riglane/local/active-scope →
+      _scope-config.json default_active_scope → "generic").
+    required: false
+    default: "generic"
+
+  - name: source
+    description: >
+      Path to the source document to analyze.
+      Can be any technical document: programming guide, API reference,
+      specification, standard, etc.
+    required: true
+
+  - name: focus
+    description: >
+      Free-text description of which parts of the document to focus on.
+      Can be section numbers, topic names, keywords, or a natural language
+      description. If omitted, the full document is analyzed.
+    required: false
+
+  - name: supplementary
+    description: >
+      Path to a supplementary document (FAQ, errata, addendum, etc.).
+      Used as additional reference during analysis. Requirements in the
+      supplementary document may clarify, amend, or override requirements
+      in the main source. If not available, analysis proceeds without it.
+    required: false
+
+  - name: domain
+    description: >
+      Target domain for the extracted specs. If omitted, the ANALYZE step
+      discovers domains automatically from the document structure and content.
+    required: false
+
+  - name: consider_reorganize
+    description: >
+      When true (default), ANALYZE evaluates whether the growing corpus has
+      outgrown its domain layout and proposes redesign (move/split/merge/rename).
+      Move/rename proposals the user approves are APPLIED after commit via a
+      CURATE (per-move gate) → APPLY branch. Set false to skip the redesign
+      analysis entirely — the run then only creates new specs and never touches
+      existing ones.
+    required: false
+    default: "true"
+
+gate:
+  structural: true
+  semantic: true
+  human: false
+  max_gate_retries: 5
+  max_step_retries: 3
+
+context:
+  carry_forward: summary
+
+steps:
+  # ──────────────────────────────────────────────
+  # Step 1: ANALYZE
+  # Deep document analysis. Identify ALL requirements, group them into
+  # domains, assign a batch-global temp_key per requirement, and dedup
+  # against existing specs. Human gate — user validates the plan.
+  # ──────────────────────────────────────────────
+  - name: analyze
+    spec_check: false
+    goal: >
+      Perform a DEEP analysis of the source document, decide how its
+      requirements become specs, and get the user's sign-off BEFORE any spec is
+      drafted.
+
+      **Requirements analysis principles:**
+      - Requirements are often SCATTERED across sections — read the full document
+        (or all focus-related sections) to capture complete requirements.
+      - Requirements INFLUENCE each other, sometimes indirectly (a constraint on
+        module A implies one on B if B depends on A). Trace these.
+      - Some requirements are IMPLICIT — derived from examples, error handling,
+        or "what happens when" scenarios. Extract these too.
+
+      **Step-by-step:**
+
+      1. Read the source document completely (even with "focus" set — you need
+         full context for cross-references and dependencies).
+
+      2. IF "focus" is provided: treat it as a priority guide. If it matches no
+         section, list the 5 closest and ASK which was meant — do NOT proceed
+         until the user confirms. Even with a focus, check other sections for
+         requirements that AFFECT the focused area (dependencies, overrides).
+
+      3. IF "supplementary" is provided: read it. Note where it clarifies,
+         amends, or contradicts the main source.
+
+      4. Identify logical DOMAINS. If "domain" is set, use it as the primary
+         domain. Otherwise discover domains from the document structure. REUSE
+         the scope's existing domains (read .riglane/specs/{scope}/_index.json and
+         generic) rather than inventing a near-synonym — reuse "auth", do
+         NOT coin "authn".
+
+      4b. **Scope-fit check.** Read the target {scope}'s coverage hint from
+         .riglane/specs/_scope-config.json (the scope entry's `hint`, if present — it
+         says what the scope governs and what belongs elsewhere). Use it to
+         confirm the requirements you plan to draft actually belong to {scope}.
+         If a requirement clearly falls OUTSIDE this scope's coverage — it
+         describes a different integration, or is a cross-integration invariant
+         that belongs in "generic" — do NOT silently draft it into {scope}:
+         record it in discrepancies with the suggested target scope and why, so
+         the human can redirect the run (re-run with the right --scope) or
+         confirm. When no hint is recorded, judge scope-fit from the document
+         and the existing domains as best you can, and note in the report that a
+         coverage hint would sharpen this (`riglane scope hint {scope} "..."`).
+
+      5. **Dedup against EXISTING specs (proactive).** Read existing specs in the
+         target {scope} AND generic. For each requirement you intend to extract,
+         check whether an existing spec already covers it:
+         - already specified → do NOT plan a draft; record it in dedup_findings
+           with disposition "covered_skip" and the covering spec id.
+         - a near-match but genuinely a DIFFERENT requirement → plan a draft AND
+           record it in dedup_findings with disposition "near_match_distinct"
+           and the near-matched spec id, so VALIDATE and the human can confirm
+           it is distinct.
+         **CRITICAL scope boundary:** never inspect or overwrite specs in scopes
+         other than the target {scope} and "generic". Sibling scopes (any other
+         declared scope) are INVISIBLE to this run — they belong to a different
+         context and must not be touched.
+
+      6. **Domain & existing-spec REDESIGN analysis.** Runs only when
+         consider_reorganize is true AND the target {scope} (plus generic)
+         ALREADY contains domains/specs; otherwise write an empty
+         redesign_proposals array. The spec corpus
+         grows run over run — a domain layout that fit the original N specs may
+         not fit the expanded set. Evaluate the CURRENT layout against the
+         union of existing specs and the requirements you are about to add,
+         and record findings of these kinds:
+         - split_domain   — a domain grew too broad / covers unrelated concerns;
+         - merge_domains  — near-synonym or sparsely populated sibling domains;
+         - rename_domain  — a name that no longer matches the domain's content;
+         - move_spec      — an existing spec that now clearly belongs to a
+           different (possibly new) domain;
+         - merge_specs    — overlapping/fragmented EXISTING specs that should
+           be consolidated into one;
+         - update_spec    — an existing spec the new document shows to be stale
+           or incomplete (beyond what dedup in step 5 already recorded).
+         Each proposal needs a rationale grounded in the ACTUAL specs (cite the
+         spec ids / domains involved) and a concrete suggested_action. For a
+         move/rename proposal also give the machine-readable target: which
+         spec_id(s), and the destination domain (mark it NEW if it doesn't exist
+         yet) or, for a rename, the domain and its new name.
+         **Placement:** propose the BEST domain for the new requirements AND
+         co-location of related existing specs (new + close existing ones into
+         one new/existing domain). Targeting a proposed/new domain for the NEW
+         specs is fine; existing specs move only later, once approved per-move.
+         **Applied vs advisory:** move/rename-reducible kinds (move_spec,
+         split_domain, merge_domains, rename_domain) ARE applied after the gate
+         via a reorganize branch (CURATE per-move gate → APPLY spec_write).
+         Content edits (merge_specs, update_spec) stay advisory. You still only
+         DRAFT new specs in this step.
+
+      7. Assign every planned requirement a **temp_key** — a stable, batch-
+         GLOBALLY-UNIQUE handle (lowercase kebab-case, unique across ALL domains
+         in this run). It becomes the draft filename and the create_batch
+         temp_key. It is NOT the spec_id — the engine mints the final
+         <domain>-NNN at commit. Record the intra-run cross-reference graph on
+         each requirement: related_temp_keys (other requirements in this run)
+         and related_existing_specs (already-existing spec ids).
+
+      8. Produce an analysis report (JSON) that gives the user FULL VISIBILITY
+         before anything is drafted:
+         - target_scope: the resolved scope (from --scope or active scope);
+           surfaced prominently so the human gate can reject if wrong
+         - scope_source: where the scope came from ("cli param",
+           "active scope (user override)", "active scope (project default)",
+           "fallback (generic)")
+         - target_directory: ".riglane/specs/{scope}/"
+         - understanding_summary: your understanding of the document scope/focus
+         - domains: each with name, one-line description, and status "pending"
+         - per domain: requirements, each with temp_key, title, source_sections
+           (section numbers / page references / quotes), related_temp_keys,
+           related_existing_specs
+         - dedup_findings: requirements already covered by an existing spec
+           (skip) and near-matches to confirm as distinct
+         - redesign_proposals: the domain/spec redesign findings from step 6
+           (empty when consider_reorganize is off, the scope had no existing
+           specs, or nothing needs restructuring)
+         - execution_plan: a small roadmap the downstream steps read to know
+           "what is for me" this run — an object with:
+             * will_extract: true iff ≥1 domain has requirements to draft
+               (i.e. ≥1 domain with status "pending" and a non-empty
+               requirements list); false when everything was covered/skipped
+             * draftable_count: how many pending domains have requirements
+             * will_reorganize: true iff redesign_proposals has ≥1 APPLICABLE
+               kind (move_spec / split_domain / merge_domains / rename_domain)
+             * applicable_moves_count: how many such proposals
+           These MUST agree with the arrays above (they are derived from them):
+           the engine routes the create pipeline on will_extract and the
+           reorganize branch on will_reorganize, so an inconsistent plan would
+           misroute the run.
+         - discrepancies and ambiguities that need user clarification
+
+      The goal is to give the user full visibility into what you found and what
+      you plan to draft, BEFORE any spec is written. When presenting the report
+      at the human gate, show the redesign proposals as their own section — the
+      move/rename ones get a per-move approval step (CURATE) after commit; they
+      are decisions for the USER, not extraction blockers.
+    subagent: true
+    inputs:
+      - path: "{source}"
+        inject: reference
+      - path: "{supplementary}"
+        inject: file_if_exists
+      - path: ".riglane/specs/_scope-config.json"
+        inject: file_if_exists
+      - path: ".riglane/specs/{scope}/_index.json"
+        inject: file_if_exists
+      - path: ".riglane/specs/{scope}/**/*.md"
+        inject: reference
+      - path: ".riglane/specs/generic/_index.json"
+        inject: file_if_exists
+      - path: ".riglane/specs/generic/**/*.md"
+        inject: reference
+    outputs:
+      - path: data/analysis-report.json
+        struct: analysis-report
+    gate:
+      structural: true
+      human: true
+    # ── EXTRACT branch: run the create pipeline ONLY when ANALYZE found new
+    # specs to draft (≥1 pending domain). When there is nothing to draft the
+    # decider returns "proceed" → the run skips straight to reorganize-gate.
+    # This is why there is no "0 items" failure: extraction is a branch, not a
+    # mandatory step. Routes evaluate AFTER the human gate above passes.
+    routes:
+      when:
+        script: "node .riglane/workflows/templates/predefined/doc-spec-extraction/scripts/has-draftable.mjs"
+      define:
+        - id: extract
+          steps:
+            # ──────────────────────────────────────────────
+            # Step 2: EXTRACT
+            # Write draft specs from the approved analysis. Parallel fan-out by
+            # domain. Every draft is a NEW spec (create-only); existing specs are
+            # read only for cross-references.
+            # ──────────────────────────────────────────────
+            - name: extract
+              spec_check: false
+              goal: >
+                For the assigned domain, write draft spec files from the approved analysis
+                report. Every draft is a NEW spec (create) — there is NO merge/update mode.
+                Existing specs are read ONLY for cross-references; never merge or overwrite
+                them (deduplication already happened in ANALYZE, and the engine enforces it
+                at commit).
+
+                Format guidance here is LIGHT on purpose — the canonical spec format is
+                enforced downstream by spec_write (VALIDATE dry-run + COMMIT). Do NOT
+                reproduce a full schema; it would drift from the engine's canonical one.
+
+                For EACH requirement the analysis assigned to THIS domain, write one
+                Markdown file into the output directory the engine gives you (your own
+                per-domain folder — the engine resolves the path; do NOT construct it).
+                Name each file <temp_key>.md — the basename IS the temp_key ANALYZE assigned.
+
+                **Frontmatter you write** (the engine sets spec_id, scope, created_at,
+                updated_at — do NOT write those):
+                - domain, title, summary, applies_to        (required)
+                - source_sections                           (cite sections / quotes)
+                - related_specs                             (KNOWN refs ONLY: existing spec
+                  ids — bare same-scope "<domain>-NNN" or qualified "<scope>:<domain>-NNN")
+                - related_by_temp_key                       (INTRA-BATCH refs ONLY:
+                  temp_keys of OTHER drafts in this run)
+                - domain_description                         (ONLY when this draft
+                  introduces a NEW domain — one line)
+                **Keep the two reference channels separate:** never put a
+                temp_key in related_specs, and never put an existing spec id in
+                related_by_temp_key. There is NO severity field and NO hand-assigned
+                spec_id — the engine mints <domain>-NNN.
+
+                **Required body sections:** Rule Statement, Validation Criteria, Source
+                Reference. OPTIONAL: Valid Examples / Invalid Examples — add ONLY when the
+                rule is ambiguous; skip when self-evident (a padded example is dead weight).
+
+                **Writing quality — keep each spec TIGHT and exactly faithful to the source:**
+                - Rule Statement: ONE sentence, PRECISE and TESTABLE, MUST/MUST NOT with
+                  concrete values. Obligation strength lives in the prose (no severity field);
+                  no hedging ("appropriate", "as needed").
+                - PRESERVE source qualifiers that carry meaning and NEVER strengthen them:
+                  modal strength (can/may/optional/"if any" → PERMITTED, not mandatory;
+                  should → recommended; must/shall → mandatory), timing (eventually,
+                  before/after X), conditionality (only when, unless), scope (in idle state,
+                  during recovery), mechanism (by calling, via). Dropping OR upgrading them
+                  changes the rule.
+                - Do NOT draft a permissive capability as a standalone MUST spec. A source
+                  that merely GRANTS an option ("can reload X", "may call Y", "Z, if any")
+                  is not an obligation; because every spec is unconditionally binding,
+                  making it a Rule Statement silently turns "can" into "must" — a fabricated
+                  violation when the implementation legitimately declined. Fold a genuine
+                  option as a permitted-alternative CLAUSE in the related mandatory spec, or
+                  (when the source only says "can"/"may") draft no spec at all.
+                - "Same as X" is an analogy about behavior — it does NOT transfer X's
+                  call-site obligation, cadence, or strength. State only the obligation the
+                  source gives THIS item, at THIS item's own strength.
+                - Every section is ADDITIVE, never a restatement, and may NOT add, broaden,
+                  or strengthen the rule beyond what the Rule Statement and source carry.
+                - Source Reference: cite the exact section/paragraph so a reader can verify.
+                - Validation Criteria is the EXECUTABLE audit oracle, semantically aligned
+                  with the Rule Statement — not a keyword/pattern search. Say WHAT to verify,
+                  WHERE to look, what to EXCLUDE, and what counts as a REAL violation: for
+                  indirect/deferred rules ("eventually calls X") check the full code path; a
+                  found occurrence that is unreachable or structurally cannot trigger the
+                  rule is NOT a violation. Self-check: if a criterion reduces to "find
+                  pattern X," add what to verify AFTER finding it, and what to EXCLUDE.
+
+                **Cross-references:** an intra-run dependency → related_by_temp_key (by
+                temp_key); a dependency on an already-existing spec → related_specs (by
+                id). Use the temp_keys and existing-spec ids from the analysis report.
+              subagent: true
+              parallel: true
+              parallel_key: "analysis-report.domains[status=pending]"
+              # Stagger spawn to populate prompt cache in the first subagent before
+              # siblings spawn. Prevents the API "Tool failed; this may be temporary"
+              # rate-limit class from triggering when 6+ subagents start at once.
+              # 5000ms is the conservative default for moderate (50-300 KB source
+              # document) extractions; raise to 7000-10000ms if a slower/stronger model
+              # tier is picked and prompts approach 200K tokens.
+              parallel_spawn_delay_ms: 5000
+              inputs:
+                - path: data/analysis-report.json
+                  struct: analysis-report
+                - path: "{source}"
+                  inject: reference
+                - path: "{supplementary}"
+                  inject: file_if_exists
+                - path: ".riglane/specs/{scope}/{domain}/*.md"
+                  inject: file_if_exists
+                - path: ".riglane/specs/generic/{domain}/*.md"
+                  inject: file_if_exists
+              outputs:
+                # Per-branch identity via {parallel_key.name} (the domain of THIS branch's
+                # analysis-report item) — engine fills it → each branch writes into its own
+                # data/drafts/<domain>/ folder. NOT the {domain} filter param (one value →
+                # all branches would collide). VALIDATE/COMMIT read data/drafts/**/*.md.
+                - path: "data/drafts/{parallel_key.name}/*.md"
+            # ──────────────────────────────────────────────
+            # Step 3: VALIDATE
+            # (A) One create_batch dry-run over the whole set — structural + cross-ref
+            # + dedup preview. (B) Semantic verification by reading. (C) Adjudicate
+            # dedup HOLDs. (D) Emit a per-draft ready/held report. Human gate.
+            # ──────────────────────────────────────────────
+            - name: validate
+              spec_check: false
+              # Spec-capability policy: dry-run authoring capability — grants
+              # spec_write/spec_search/spec_link (per-step tool whitelist) + authoring
+              # guidance, NO .riglane/specs outputs (this step persists nothing; the
+              # engine rejects a persisting spec_write call during it).
+              spec_authoring: validate
+              goal: >
+                Validate ALL draft specs before commit. Two layers: (A) an engine batch
+                PREVIEW that proves structural + cross-reference + dedup integrity over the
+                whole set at once, and (B) SEMANTIC verification you perform by reading.
+                Produce a validation report whose per-draft ready/held verdict COMMIT
+                consumes verbatim.
+
+                **A. Engine batch preview — ONE call over the whole set.**
+                Call spec_write(op:create_batch, scope:"{scope}", dry_run:true, drafts:[…])
+                with EVERY draft across ALL domains — the exact payload COMMIT will use:
+                  - path: the draft file
+                  - temp_key: the draft basename without ".md"
+                  - related_by_temp_key: from the draft's `related_by_temp_key` frontmatter
+                    (intra-batch refs only; known/existing-spec refs stay in related_specs)
+                dry_run runs the full pipeline — structural validation, domain rules, the
+                temp_key graph (self-reference, unknown/DANGLING refs), and dedup (against
+                existing specs AND candidate-vs-candidate within the batch) — and writes
+                NOTHING. This is the ONLY way to surface batch-level defects (a dangling
+                temp_key, a candidate-vs-candidate duplicate); a per-draft check cannot see
+                them. Read the returned per-draft verdicts, matches, and errors. (This step
+                is spec_authoring: validate — the engine REJECTS any persisting spec_write
+                call here; only dry_run:true is accepted. Committing happens in COMMIT.)
+
+                **B. Semantic verification — you READ; you do NOT script.**
+                Scripts may check metadata (fields, file existence) but CANNOT judge
+                meaning. For EACH draft, against its cited source_sections:
+                  1. ACCURACY — Rule Statement faithful to the source; qualifier words
+                     preserved, INCLUDING modal strength (a source "can"/"may"/"optional"/
+                     "if any" must NOT surface as "must"/"shall"; "should" is recommended,
+                     not mandatory) as well as timing (eventually, immediately, before/
+                     after) and conditionality (only when, unless). Cross-check the cited
+                     source text actually carries the strength the Rule Statement claims,
+                     and FLAG as an accuracy defect any draft that (a) upgrades a
+                     permissive source statement into a mandatory rule, (b) promotes an
+                     optional capability ("the service can reload X") into a standalone MUST
+                     spec, (c) copies another requirement's obligation onto an item the
+                     source only calls "same as" it, (d) lets any section (Examples,
+                     Criteria) introduce or broaden an obligation absent from the Rule
+                     Statement or the source, or (e) pads a section with mere restatement
+                     of the rule instead of an additive layer (boundary / how-to-verify /
+                     citation).
+                  2. COMPLETENESS — every requirement in the cited sections is captured.
+                  3. CONSISTENCY — no draft contradicts another (including cross-domain).
+                  4. TRACEABILITY — every requirement has a resolvable Source Reference,
+                     and the draft's references match what the analysis report recorded
+                     (related_temp_keys / related_existing_specs).
+                  5. TESTABILITY — Validation Criteria say WHAT to verify, WHERE to look,
+                     and what to EXCLUDE — not a bare keyword/pattern search.
+                  6. EXAMPLES — optional; if present, Valid/Invalid examples are realistic
+                     and demonstrate the rule. Absence is NOT a defect.
+
+                **C. Adjudicate the engine's dedup HOLDs (engine flags → you judge →
+                human confirms).** For each near_certain match the preview flagged, read
+                BOTH the draft and the matched existing spec, then decide:
+                  - genuinely a DIFFERENT requirement → mark it acknowledged-distinct (its
+                    temp_key goes into acknowledge_distinct_temp_keys so COMMIT can create
+                    it);
+                  - the SAME requirement (a true duplicate) → mark it DROPPED (the existing
+                    spec already covers it; the draft stays in data/drafts/, out of commit).
+                NEVER auto-acknowledge to force a write — a real duplicate must be dropped.
+
+                **D. Write data/validation-report.json:**
+                  - workflow, validated_at, total_drafts, ready_count, held_count
+                  - per draft: temp_key, domain, draft_path, verdict ("ready" | "held"),
+                    checks_performed (all 6, every draft), issues. For a "held" draft also
+                    add held_reason and the detail the human needs to adjudicate: for a
+                    dedup hold, matched_spec_id and the dedup signals (from the preview's
+                    `matches` for a vs-existing near-certain; the named temp_key pair for a
+                    candidate-vs-candidate near-certain); for a
+                    dangling/structural/conflict hold, the specific error.
+                  - acknowledge_distinct_temp_keys: [temp_keys judged genuinely distinct]
+                  - dropped: [{temp_key, reason}]
+                The "ready" set plus acknowledge_distinct_temp_keys are exactly what COMMIT
+                feeds to the real create_batch. If a "ready" draft references a
+                "held"/dropped draft (dangling), flag it — the human must resolve it
+                (un-hold, or drop the dependent) before commit.
+              subagent: true
+              inputs:
+                - path: "data/drafts/**/*.md"
+                - path: ".riglane/specs/{scope}/**/*.md"
+                  inject: reference
+                - path: ".riglane/specs/generic/**/*.md"
+                  inject: reference
+                - path: "{source}"
+                  inject: reference
+                - path: "{supplementary}"
+                  inject: file_if_exists
+                - path: data/analysis-report.json
+                  inject: reference
+              outputs:
+                - path: data/validation-report.json
+                  struct: validation-report
+              gate:
+                structural: true
+                human: true
+            # ──────────────────────────────────────────────
+            # Step 4: COMMIT
+            # Persist the "ready" drafts via ONE create_batch call. Engine mints ids,
+            # resolves cross-refs, dedups, writes .md + derives _index — atomically,
+            # all-or-nothing. No manual index/registry writes.
+            # ──────────────────────────────────────────────
+            - name: commit
+              spec_check: false
+              # Spec-capability policy: persisting authoring capability —
+              # grants spec_write/spec_search/spec_link (per-step tool whitelist) + authoring
+              # guidance + engine-auto-declared .riglane/specs outputs (see the note
+              # at the end of this step).
+              spec_authoring: persist
+              goal: >
+                Persist the validated drafts as real specs via ONE engine call.
+
+                **Authority:** data/validation-report.json is authoritative. If it is
+                missing, STOP and report an error — never commit unvalidated drafts.
+                Commit ONLY the drafts VALIDATE marked verdict:"ready"; drafts marked
+                "held" stay in data/drafts/ untouched. If the ready set is EMPTY, do NOT
+                call create_batch with an empty list — report that nothing is ready (with
+                the held reasons) and finish.
+
+                **You do NOT write spec files, _index.json, or _registry.json yourself.**
+                The engine owns all of that. Your job is to hand the ready drafts to
+                spec_write(op:create_batch); the engine mints the ids, resolves the
+                cross-references, dedups, writes every .md, and derives the index —
+                atomically, all-or-nothing.
+
+                **Step-by-step:**
+
+                1. Read data/validation-report.json. Collect the ready set (results with
+                   verdict:"ready") and acknowledge_distinct_temp_keys. Read each ready
+                   draft from data/drafts/.
+
+                2. Build ONE create_batch payload spanning ALL domains (a single call —
+                   cross-references may cross domain boundaries, and only one batch can
+                   resolve them). For each ready draft, one entry:
+                     - path: the draft file
+                     - temp_key: the draft basename without ".md"
+                     - related_by_temp_key: the draft's intra-batch references, from its
+                       `related_by_temp_key` frontmatter (temp_keys of OTHER drafts in this
+                       batch). Known/existing-spec references stay in the draft's
+                       `related_specs` frontmatter and pass through untouched — never copy
+                       them into related_by_temp_key.
+
+                3. Call spec_write(op:create_batch, scope:"{scope}",
+                   acknowledge_distinct_temp_keys:[… from the report …], drafts:[…]). The
+                   scope MUST equal target_scope from the analysis report.
+
+                4. Handle the result (all-or-nothing):
+                   - ok:true → the engine wrote every spec and derived the index. Record
+                     each draft's assigned_spec_id. Note the returned `domains` echo.
+                   - ok:false → NOTHING was written. Read the per-draft verdicts:
+                       * error → a structural / domain / dangling-ref problem: fix that
+                         draft and resubmit.
+                       * held (near_certain vs an existing spec) → this was resolved at
+                         VALIDATE. If one still holds, add its temp_key to
+                         acknowledge_distinct_temp_keys ONLY if it is genuinely distinct;
+                         otherwise DROP the draft (leave it in data/drafts/).
+                     Fix / drop the flagged drafts, then resubmit the ENTIRE batch (the
+                     engine re-validates the whole set). Repeat until ok:true. Because
+                     VALIDATE already ran the create_batch dry-run, an ok:false here is
+                     rare — treat a surprise failure as a sign that something changed
+                     since validation and report it.
+
+                5. Write a DETAILED SUMMARY to the chat:
+                   - Source document analyzed; focus area (if specified)
+                   - Total requirements → total specs committed
+                   - Per domain: committed (N), held-for-review (N)
+                   - For each committed spec: assigned_spec_id + title — one line
+                   - For each held/dropped draft: temp_key + why
+                   - Suggested next steps (e.g. "resolve 2 held drafts in data/drafts/")
+
+                Do NOT commit to git.
+              subagent: true
+              inputs:
+                - path: data/validation-report.json
+                - path: "data/drafts/**/*.md"
+              # No manual outputs: spec_authoring: persist auto-declares
+              # .riglane/specs/{scope}/**/*.md + .riglane/specs/generic/**/*.md at load, with
+              # write_proof: any_member (incremental-safe: ≥1 spec
+              # written this step proves work; all_members_fresh would fail incremental
+              # runs over untouched existing specs) + optional (empty ready set is legal).
+
+  # ──────────────────────────────────────────────
+  # Step 5: REORGANIZE-GATE (inline pivot — owns the reorganize route)
+  # Always runs (reached whether or not the extract branch was taken). Owns
+  # the reorganize route so applying the approved moves is reachable EVEN when
+  # extraction was skipped (0 draftable, but existing specs to move). Does no
+  # work itself — the engine evaluates the route from the analysis report.
+  # ──────────────────────────────────────────────
+  - name: reorganize-gate
+    # Decision-only pivot step (routes carrier) — deliberately no file artifact.
+    acknowledge_warnings: [no-outputs]
+    spec_check: false
+    subagent: false
+    goal: >
+      Routing checkpoint — do NO work here. The engine reads data/analysis-report.json
+      and decides whether to enter the reorganize branch (apply the user-approved
+      move/rename proposals) or finish the run. State that you are handing control
+      to the engine's route decision, and take no other action.
+    inputs:
+      - path: data/analysis-report.json
+        inject: reference
+    # ── REORGANIZE branch: apply the user-approved move/rename proposals.
+    # Entered ONLY when ANALYZE proposed ≥1 applicable (move/rename-reducible)
+    # redesign — the when.script decides from data/analysis-report.json.
+    # create-last is safe: any new specs were already committed in the extract
+    # branch, and the engine's move rewrites same-scope related_specs across the
+    # LIVE tree, so those just-committed specs' refs to a moved id are fixed too.
+    routes:
+      when:
+        script: "node .riglane/workflows/templates/predefined/doc-spec-extraction/scripts/has-applicable-moves.mjs"
+      define:
+        - id: reorganize
+          steps:
+            - name: curate-moves
+              spec_check: false
+              subagent: true
+              goal: >
+                Present ANALYZE's APPLICABLE redesign proposals and capture the
+                user's per-move decision, then write the approved set for APPLY.
+
+                **You write ONLY data/approved-moves.json — you do NOT move any
+                spec here.**
+
+                1. Read data/analysis-report.json. Take redesign_proposals whose
+                   kind is move_spec, split_domain, merge_domains, or
+                   rename_domain. IGNORE merge_specs / update_spec — those are
+                   content edits and stay advisory (mention them once, in passing).
+
+                2. Present each applicable proposal to the user, grouped, with its
+                   rationale and concrete target (which spec_id(s) → which domain;
+                   or which domain → new name). Ask which to apply (default: all).
+
+                3. For each APPROVED proposal, emit ONE operations[] entry as a
+                   spec_write op:
+                     - move_spec / split_domain / merge_domains →
+                       {op:"move", spec_ids:[…], to_domain:"<dest>",
+                        to_domain_description:"<one line>" ONLY when <dest> is a
+                        NEW domain};
+                     - rename_domain →
+                       {op:"rename_domain", domain:"<current>", new_domain:"<new>"}.
+                   Carry source_proposal_kind and a one-line rationale. Keep the
+                   order the user approved.
+
+                4. Write data/approved-moves.json: workflow, curated_at, scope
+                   (= the report's target_scope), operations:[…] — an EMPTY
+                   operations array is valid (the user approved none → APPLY
+                   no-ops). APPLY consumes this file verbatim.
+
+                Do NOT proceed until the user confirms the curated set.
+              inputs:
+                - path: data/analysis-report.json
+                  inject: file
+              outputs:
+                - path: data/approved-moves.json
+                  struct: approved-moves
+              gate:
+                structural: true
+                human: true
+            # ── APPLY: execute the approved moves via spec_write ──
+            - name: apply-moves
+              spec_check: false
+              # Persisting authoring capability — grants spec_write (+ search/
+              # link) and injects authoring guidance. This route step gets its own
+              # per-step agent (init-workflow descends into routes.define).
+              spec_authoring: persist
+              subagent: true
+              goal: >
+                Apply the approved reorganization via the engine's spec_write
+                tool. You are the worker — call spec_write directly; NEVER
+                hand-edit spec files, _index.json, or _registry.json (the engine
+                owns the whole cascade).
+
+                **Authority:** data/approved-moves.json. If it is missing, STOP
+                and report an error. If operations[] is EMPTY, report "nothing to
+                reorganize" and finish — do NOT call spec_write.
+
+                1. Read data/approved-moves.json. Its scope MUST equal the run's
+                   {scope}.
+
+                2. For each entry in operations[], IN ORDER, call spec_write:
+                     - op:"move"          → spec_write(op:"move", scope:"{scope}",
+                       spec_ids:[…], to_domain:"…"[, to_domain_description:"…"]).
+                     - op:"rename_domain" → spec_write(op:"rename_domain",
+                       scope:"{scope}", domain:"…", new_domain:"…").
+                   The engine re-mints ids, rewrites same-scope related_specs, and
+                   updates the index/registry atomically. HEED any body_refs
+                   warnings it returns (a spec's PROSE mentions a moved id) —
+                   report them; the engine does not auto-rewrite prose.
+
+                3. Handle results honestly: if a call fails (unknown domain, empty
+                   spec_ids, …), record it and continue with the rest — never fake
+                   success, never retry by hand-editing.
+
+                4. Write a SUMMARY: per operation — applied (spec_ids → new domain
+                   / new id) or failed (why); plus any body_refs warnings the user
+                   should resolve manually.
+
+                Do NOT commit to git.
+              inputs:
+                - path: data/approved-moves.json
+              gate:
+                structural: true
+                human: false

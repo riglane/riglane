@@ -1,0 +1,52 @@
+{
+  "hooks": {
+    "SubagentStart": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "riglane spawn-throttle",
+            "timeout": 600
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "riglane gate-check --host claude-code",
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "riglane file-guard --host claude-code",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|Task|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "riglane tool-call-logger --host claude-code",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

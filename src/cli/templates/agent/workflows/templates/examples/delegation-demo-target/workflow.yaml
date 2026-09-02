@@ -1,0 +1,59 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# delegation-demo-target — the workflow delegation-demo delegates to (the "B"
+# of the A→B pair). A complete standalone workflow: it can also be run
+# directly (/riglane-run-workflow delegation-demo-target component=x).
+#
+# Receives `component` from the parent's `params:` block. Produces TWO files
+# in ITS OWN run dir — every delegated run gets a separate run dir, manifest,
+# and trace:
+#   • data/analysis.json           — the parent extracts the scalar `verdict`
+#                                    out of it via param_bindings.
+#   • data/{run_id}-details.md     — a DYNAMICALLY-NAMED artifact ({run_id} =
+#                                    THIS run's id). The parent cannot declare
+#                                    that path statically — it collects the
+#                                    FILE via from_delegated (artifact
+#                                    handoff). Declaring it as an output here
+#                                    makes THIS workflow's gate guarantee it
+#                                    exists before the handoff runs.
+# The gate config here is THIS workflow's own — a delegating parent's gate is
+# never inherited.
+# ─────────────────────────────────────────────────────────────────────────────
+name: delegation-demo-target
+version: 1
+description: >
+  Delegation target for delegation-demo: analyzes one named component
+  (demo — simulated), records a verdict and a details file. Also runnable
+  standalone.
+
+params:
+  - name: component
+    description: Name of the component to analyze.
+    required: true
+
+steps:
+  - name: analyze
+    goal: >
+      Analyze the component named "{component}" (this is a demo — simulate
+      the analysis) and write TWO files:
+
+      1. data/analysis.json exactly as:
+         {"component": "{component}", "verdict": "pass",
+          "note": "<one short sentence describing what was simulated>"}
+
+      2. The details file at the exact resolved path shown in the outputs
+         section (its name contains this run's id):
+
+         # Analysis details: {component}
+
+         - verdict: pass
+         - <two or three bullet points describing the simulated analysis>
+
+      Write both files exactly as specified — the delegating workflow parses
+      analysis.json mechanically (param_bindings) and collects the details
+      file (from_delegated artifact handoff).
+    subagent: true
+    spec_check: false
+    outputs:
+      - path: data/analysis.json
+        struct: analysis
+      - path: data/{run_id}-details.md

@@ -1,0 +1,15 @@
+name: consume-report
+description: spec-capabilities-demo consumption summary
+version: 1
+type: object
+required:
+  - spec_id
+  - honored
+  - how
+properties:
+  spec_id:
+    type: string
+  honored:
+    type: boolean
+  how:
+    type: string

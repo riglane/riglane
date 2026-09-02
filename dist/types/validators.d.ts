@@ -1,0 +1,53 @@
+import type { ErrorObject } from 'ajv';
+import type { CursorDecision, HookInputCC, HookInputCursor } from './hooks.js';
+import type { Manifest } from './manifest.js';
+import type { ToolCallError, ToolCallSuccess } from './mcp.js';
+import type { Snapshot } from './snapshot.js';
+import type { SpecIndex, SpecRegistry } from './spec.js';
+import type { StructSchema } from './struct.js';
+import type { Trace } from './trace.js';
+import type { Workflow } from './workflow.js';
+type SchemaJson = Record<string, unknown>;
+export declare const registeredSchemas: Readonly<Record<string, SchemaJson>>;
+export type ValidationOutcome<T> = {
+    readonly ok: true;
+    readonly value: T;
+} | {
+    readonly ok: false;
+    readonly errors: readonly ErrorObject[];
+};
+export declare class SchemaValidationError extends Error {
+    readonly schemaName: string;
+    readonly errors: readonly ErrorObject[];
+    readonly name = "SchemaValidationError";
+    constructor(schemaName: string, errors: readonly ErrorObject[]);
+}
+export declare function formatAjvErrors(errors: readonly ErrorObject[]): string;
+export declare const validateWorkflow: (value: unknown) => Workflow;
+export declare const tryValidateWorkflow: (value: unknown) => ValidationOutcome<Workflow>;
+export declare const validateManifest: (value: unknown) => Manifest;
+export declare const tryValidateManifest: (value: unknown) => ValidationOutcome<Manifest>;
+export declare const validateTrace: (value: unknown) => Trace;
+export declare const tryValidateTrace: (value: unknown) => ValidationOutcome<Trace>;
+export declare const validateHookInputCC: (value: unknown) => HookInputCC;
+export declare const tryValidateHookInputCC: (value: unknown) => ValidationOutcome<HookInputCC>;
+export declare const validateHookInputCursor: (value: unknown) => HookInputCursor;
+export declare const tryValidateHookInputCursor: (value: unknown) => ValidationOutcome<HookInputCursor>;
+export declare const validateCursorDecision: (value: unknown) => CursorDecision;
+export declare const tryValidateCursorDecision: (value: unknown) => ValidationOutcome<CursorDecision>;
+export declare const validateGateResult: (value: unknown) => import("./gate-result.js").GateLedgerV2;
+export declare const tryValidateGateResult: (value: unknown) => ValidationOutcome<import("./gate-result.js").GateLedgerV2>;
+export declare const validateStruct: (value: unknown) => StructSchema;
+export declare const tryValidateStruct: (value: unknown) => ValidationOutcome<StructSchema>;
+export declare const validateSnapshot: (value: unknown) => Snapshot;
+export declare const tryValidateSnapshot: (value: unknown) => ValidationOutcome<Snapshot>;
+export declare const validateSpecIndex: (value: unknown) => SpecIndex;
+export declare const tryValidateSpecIndex: (value: unknown) => ValidationOutcome<SpecIndex>;
+export declare const validateSpecRegistry: (value: unknown) => SpecRegistry;
+export declare const tryValidateSpecRegistry: (value: unknown) => ValidationOutcome<SpecRegistry>;
+export declare const validateToolCallSuccess: (value: unknown) => ToolCallSuccess<unknown>;
+export declare const tryValidateToolCallSuccess: (value: unknown) => ValidationOutcome<ToolCallSuccess<unknown>>;
+export declare const validateToolCallError: (value: unknown) => ToolCallError;
+export declare const tryValidateToolCallError: (value: unknown) => ValidationOutcome<ToolCallError>;
+export declare const tryValidateMcpDef: <T>(defName: string, value: unknown) => ValidationOutcome<T>;
+export {};

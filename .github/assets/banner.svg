@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-label="Riglane — a workflow control plane for AI agents">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#191712"/>
+      <stop offset="1" stop-color="#211d15"/>
+    </linearGradient>
+    <linearGradient id="lane" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#e06a43" stop-opacity="0"/>
+      <stop offset="0.12" stop-color="#e06a43" stop-opacity="0.85"/>
+      <stop offset="0.88" stop-color="#e06a43" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#e06a43" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="320" fill="url(#bg)"/>
+
+  <!-- faint parallel lanes -->
+  <g stroke="#322e26" stroke-width="1">
+    <line x1="0" y1="70" x2="1200" y2="70"/>
+    <line x1="0" y1="250" x2="1200" y2="250"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="600" y="128" text-anchor="middle" font-family="ui-monospace,Cascadia Code,Consolas,Menlo,monospace" font-size="64" letter-spacing="14" fill="#e06a43" font-weight="bold">RIGLANE</text>
+  <text x="600" y="168" text-anchor="middle" font-family="ui-monospace,Cascadia Code,Consolas,Menlo,monospace" font-size="19" letter-spacing="2" fill="#948c7a">a workflow control plane for AI agents</text>
+
+  <!-- the lane: steps and hard gates -->
+  <g transform="translate(0,222)">
+    <line x1="150" y1="0" x2="1050" y2="0" stroke="url(#lane)" stroke-width="2"/>
+    <!-- steps -->
+    <g fill="#191712" stroke="#e8e2d4" stroke-width="2">
+      <circle cx="270" cy="0" r="9"/>
+      <circle cx="490" cy="0" r="9"/>
+      <circle cx="710" cy="0" r="9"/>
+      <circle cx="930" cy="0" r="9"/>
+    </g>
+    <!-- completed step ticks -->
+    <g stroke="#e06a43" stroke-width="2.5" fill="none" stroke-linecap="round">
+      <path d="M264,0 l4,4 l8,-8"/>
+      <path d="M484,0 l4,4 l8,-8"/>
+    </g>
+    <!-- hard gates between steps -->
+    <g stroke="#e8e2d4" stroke-width="3" stroke-linecap="round">
+      <line x1="380" y1="-16" x2="380" y2="16"/>
+      <line x1="600" y1="-16" x2="600" y2="16"/>
+      <line x1="820" y1="-16" x2="820" y2="16"/>
+    </g>
+    <!-- gate labels -->
+    <g font-family="ui-monospace,Cascadia Code,Consolas,Menlo,monospace" font-size="12" fill="#948c7a" text-anchor="middle">
+      <text x="270" y="34">plan</text>
+      <text x="490" y="34">implement</text>
+      <text x="710" y="34">verify</text>
+      <text x="930" y="34">sign-off</text>
+      <text x="380" y="-26">gate</text>
+      <text x="600" y="-26">gate</text>
+      <text x="820" y="-26">human gate</text>
+    </g>
+  </g>
+</svg>

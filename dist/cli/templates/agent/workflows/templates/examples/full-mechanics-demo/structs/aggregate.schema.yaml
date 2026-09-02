@@ -1,0 +1,21 @@
+name: aggregate
+version: 1
+description: >
+  Roll-up of all parallel branch results, written by the inline `aggregate` step.
+type: object
+required:
+  - total
+  - done
+  - items
+properties:
+  total:
+    type: integer
+    description: "Count of per-branch result files found."
+  done:
+    type: integer
+    description: "Count of results with status 'done'."
+  items:
+    type: array
+    items:
+      type: string
+      description: "Item name."

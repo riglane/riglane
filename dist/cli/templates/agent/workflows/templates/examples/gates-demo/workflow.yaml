@@ -1,0 +1,152 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# gates-demo — reference + self-test workflow for the GATE system: the three
+# gate kinds, the two retry budgets, and the acknowledgment mechanism.
+#
+# What it demonstrates (read top-to-bottom as a tutorial):
+#   1. structural gate (default ON) — file existence + struct schema +
+#                                write_proof, validated by the gate hook after
+#                                every subagent step. The `draft` step's struct
+#                                is the machine contract.
+#   2. retry budgets            — max_gate_retries (IN-SESSION bounce: the
+#                                subagent gets the failure details and fixes
+#                                within the same session) vs max_step_retries
+#                                (fresh-worker RE-SPAWN after the in-session
+#                                budget is exhausted). Configured per step here
+#                                so you can see both knobs.
+#   3. semantic gate            — an LLM judgment pass AFTER the structural
+#                                gate: the orchestrator evaluates the review
+#                                step's output for coherence, on engine
+#                                assignment (step_collect_result returns
+#                                needs_semantic_gate + instructions).
+#   4. human gate               — the run PAUSES for the user's explicit
+#                                approval before finalize (approve step).
+#   5. GATES ARE CONFIG, NOT STEPS — note there is no "quality-check" step
+#                                here: the semantic gate lives ON the review
+#                                step. (A separate verify STEP is legitimate
+#                                only when it does real independent work —
+#                                see predefined/spec-audit.)
+#   6. acknowledge_warnings     — the checklist step below deliberately has no
+#                                file outputs; the lint's `no-outputs` warning
+#                                is acknowledged ON the step, keeping the
+#                                intent visible (this is the mechanism, live).
+#
+# SCOPE NOTE: semantic/human gates act only on SUBAGENT steps — declared on an
+# inline (subagent: false) step they have no effect (lint: inline-agent-gate).
+#
+# Run:  /riglane-run-workflow gates-demo
+#       (the human gate WILL stop and ask you — that is the demonstration)
+# Full semantics: workflow_learn(topic="gate").
+# ─────────────────────────────────────────────────────────────────────────────
+name: gates-demo
+version: 1
+description: >
+  Reference and self-test workflow for the gate system. A draft step under a
+  strict structural gate (with visible retry budgets), a review step that adds
+  an LLM semantic gate, a human-approval checkpoint before completion, and a
+  live demonstration of the lint acknowledgment mechanism.
+
+params:
+  - name: topic
+    description: What the demo document is about (any short phrase).
+    required: false
+    default: "request retry timing"
+
+# Workflow-level defaults; steps below OVERRIDE per key (unmentioned keys
+# inherit — `gate: {}` on a step would be identical to absent).
+gate:
+  structural: true
+  semantic: false
+  human: false
+  max_gate_retries: 3
+  max_step_retries: 2
+
+steps:
+  # ── Step 1: structural gate + the two retry budgets ─────────────────────────
+  - name: draft
+    goal: >
+      Draft a short demo document about "{topic}". Write data/draft.json with
+      fields: topic (copy the param), points (an array of exactly 3 short
+      bullet strings), and confidence (an integer 1-10). The structural gate
+      validates this against the draft struct — if you miss a field, the gate
+      returns the failure details and you fix it IN THIS SESSION (that is the
+      max_gate_retries budget; after it, a fresh worker is re-spawned up to
+      max_step_retries times).
+    subagent: true
+    spec_check: false
+    outputs:
+      - path: data/draft.json
+        struct: draft
+    gate:
+      structural: true
+      max_gate_retries: 2
+      max_step_retries: 1
+
+  # ── Step 2: + semantic gate (LLM judgment AFTER the structural pass) ───────
+  # The semantic gate is CONFIG on this step — not a separate "check" step.
+  - name: review
+    goal: >
+      Review the draft (data/draft.json) and write data/review.json with
+      fields: verdict ("ship" or "revise"), reasons (array of 1-3 short
+      strings), and improved_points (array of exactly 3 strings — the
+      points, improved). After the structural gate passes, the ENGINE will
+      assign a semantic evaluation of this output's coherence — that is the
+      semantic gate firing; obey the returned instructions.
+    subagent: true
+    spec_check: false
+    inputs:
+      - path: data/draft.json
+        inject: file
+    outputs:
+      - path: data/review.json
+        struct: review
+    gate:
+      structural: true
+      semantic: true
+
+  # ── Step 3: pure-action step + the acknowledgment mechanism, live ──────────
+  # Deliberately NO file outputs (it only prints a checklist summary to its
+  # own session) → the lint's `no-outputs` warning fires — and is acknowledged
+  # HERE, on the step, so reviewers see the intent. This is warning ack in
+  # action; use it for deliberate patterns, never to silence real mistakes.
+  - name: checklist
+    goal: >
+      Read data/draft.json and data/review.json and verbally confirm (in your
+      session output, no files): (1) the draft has 3 points; (2) the review
+      verdict is "ship" or "revise"; (3) one sentence on whether the improved
+      points are actually better. This step exists to demonstrate a pure-action
+      step with an acknowledged no-outputs warning.
+    subagent: true
+    spec_check: false
+    acknowledge_warnings: [no-outputs]
+    inputs:
+      - path: data/draft.json
+        inject: file
+      - path: data/review.json
+        inject: file
+
+  # ── Step 4: human gate — the run pauses for YOUR approval ──────────────────
+  - name: approve
+    goal: >
+      Prepare the final summary for human approval. Write data/final.md:
+
+      # gates-demo final
+
+      - topic: {topic}
+      - verdict: <from review.json>
+      - the 3 improved points as a list
+      - one sentence asking the human whether this may be finalized.
+
+      After the structural gate passes, the ENGINE will require an explicit
+      human decision before this step completes — relay the question to the
+      user and wait for their answer (that is the human gate).
+    subagent: true
+    spec_check: false
+    carry_forward: true
+    inputs:
+      - path: data/review.json
+        inject: file
+    outputs:
+      - path: data/final.md
+    gate:
+      structural: true
+      human: true

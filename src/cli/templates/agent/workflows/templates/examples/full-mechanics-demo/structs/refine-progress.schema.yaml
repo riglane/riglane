@@ -1,0 +1,21 @@
+name: refine-progress
+version: 1
+description: >
+  The refinement loop's progress registry — shared mutable state seeded by
+  `aggregate`, rewritten by `record` every pass, and read by the loop's
+  when.script decider (check_progress.py) to decide loop vs proceed.
+type: object
+required:
+  - passes_total
+  - passes_done
+  - passes_remaining
+properties:
+  passes_total:
+    type: integer
+    description: "Total refinement passes requested (from the refine_passes param)."
+  passes_done:
+    type: integer
+    description: "Passes completed so far."
+  passes_remaining:
+    type: integer
+    description: "Passes left; the loop continues while this is > 0."

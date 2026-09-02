@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "$id": "https://riglane.dev/schemas/_scope-config.schema.json",
+  "title": "Scope configuration",
+  "description": "Project-level declaration of available scopes for behavioral specs. Optional file — when absent, only the implicit 'generic' scope is available.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "scopes": {
+      "type": "array",
+      "description": "Declared scopes beyond the implicit 'generic'. Order is not significant.",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$",
+            "description": "Unique scope identifier. Must be lowercase, starting with a letter, containing only letters/digits/hyphens. Doubles as the directory name under .riglane/specs/.",
+            "not": { "const": "generic" }
+          },
+          "label": {
+            "type": "string",
+            "description": "Human-readable description of what the scope represents (e.g., 'Payments integration (v2 API)'). Displayed in CLI output and error messages. Optional — defaults to id."
+          },
+          "hint": {
+            "type": "string",
+            "description": "Coverage hint: WHAT this scope's specs govern and, ideally, what they do NOT (with where those belong instead) — e.g. 'Payments API protocol, checkout, refunds. NOT: cross-cutting invariants (→ generic), the fulfilment integration (→ another scope).'. Injected into the scope-orientation guidance the engine gives agents at spec_check / spec_authoring steps, and shown by the scope skills. Optional but strongly recommended — the spec skills prompt for it."
+          }
+        }
+      }
+    },
+    "default_active_scope": {
+      "type": ["string", "null"],
+      "description": "Team-level default active scope used when no user override (.riglane/local/active-scope) is present. Must be either 'generic' or an id declared in 'scopes'. Null/omitted means 'generic' is the fallback."
+    }
+  }
+}

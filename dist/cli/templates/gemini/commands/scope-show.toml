@@ -1,0 +1,19 @@
+description = "Show the currently active Riglane spec scope and where it was resolved from"
+
+prompt = '''
+# Riglane scope-show
+
+Display the active scope for spec operations and its resolution source.
+
+Run via the shell tool:
+
+```
+riglane scope show
+```
+
+The command resolves the active scope via the priority chain: `.riglane/local/active-scope` (user
+override) → `.riglane/specs/_scope-config.json` `default_active_scope` → `generic` (fallback), and
+lists the available scopes (with coverage hints when set). Relay the output to the user.
+
+Related: `/riglane:scope-set <id>` · `/riglane:scope-unset` · `/riglane:scope-list` · `/riglane:scope-add`.
+'''

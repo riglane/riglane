@@ -1,0 +1,17 @@
+name: loop-plan
+description: >
+  Output of prepare-plan — the fixed list of demo scenarios the loop
+  consumes. `total` MUST equal the length of `scenarios`.
+format: json
+
+json_schema:
+  required_fields:
+    - field: total
+      type: number
+    - field: scenarios
+      type: array
+      min_items: 1
+    - field: scenarios[].id
+      type: number
+    - field: scenarios[].title
+      type: string

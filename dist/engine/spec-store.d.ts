@@ -1,0 +1,16 @@
+import type { DomainEntry, SpecIndex, SpecRegistry } from '../types/spec.js';
+export declare function specIndexPath(scope: string, root?: string): string;
+export declare function specRegistryPath(scope: string, root?: string): string;
+export declare function specFilePath(scope: string, domain: string, specId: string, root?: string): string;
+export declare function specRelPath(scope: string, domain: string, specId: string): string;
+export declare function readSpecIndex(scope: string, root?: string): SpecIndex;
+export declare function writeSpecIndex(scope: string, index: SpecIndex, root?: string): void;
+export declare function readSpecRegistry(scope: string, root?: string): SpecRegistry;
+export declare function writeSpecRegistry(scope: string, registry: SpecRegistry, root?: string): void;
+export declare function readSpecDomains(scope: string, root?: string): DomainEntry[];
+export declare function readSpecIndexRaw(scope: string, root?: string): SpecIndex | null;
+export declare function emptySpecIndex(scope: string): SpecIndex;
+export declare function emptySpecRegistry(scope: string): SpecRegistry;
+export declare function writeSpecMarkdown(scope: string, domain: string, specId: string, content: string, root?: string): string;
+export declare function readSpecMarkdown(path: string): string;
+export declare function deleteSpecMarkdown(path: string): boolean;

@@ -1,0 +1,234 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# parallel-lanes-demo — reference + self-test workflow for the `lanes` mechanism
+# (parallel execution lanes with an engine-owned join barrier).
+#
+# What it demonstrates (read top-to-bottom as a tutorial):
+#   1. lanes block           — after the fork step, EVERY lane starts
+#                              CONCURRENTLY. Unlike routes there is no `when`:
+#                              nothing is chosen, all lanes always run. The
+#                              orchestrator receives ENTER_LANES with the
+#                              {lane → first step} map and drives the lanes
+#                              interleaved (independent lane subagents may be
+#                              spawned in ONE message).
+#   2. A lane is a full linear segment — the `research` lane carries TWO steps
+#                              and a loop_back that repeats within the lane;
+#                              the `review` lane carries a routes block that
+#                              branches within the lane. Neither ever touches
+#                              the other lane or the main flow.
+#   3. Sibling isolation      — the lanes write DISJOINT output paths into the
+#                              shared run dir (a collision is refused at load).
+#   4. The join barrier       — the engine waits for EVERY lane to reach a
+#                              terminal state (there is no way to cancel live
+#                              subagents — `require` only changes the verdict),
+#                              applies join.require, writes the collection
+#                              index data/fan-out-join.json and returns the
+#                              cursor to `synthesize`.
+#   5. The join is NOT a step — `synthesize` is an ORDINARY step: it reads the
+#                              lane outputs directly (shared run dir), builds
+#                              the combined report, and the structural gate
+#                              enforces its schema. A merge script would be its
+#                              tools: entry; an LLM judgment its gate.semantic.
+#
+# As a TEST INSTRUMENT, a full run exercises: ENTER_LANES registration, the
+# multi-cursor Phase A admission (both first lane steps beginnable in any
+# order; a main step past the fork refuses with BLOCKED_LANES_ACTIVE),
+# LANE_WAIT on the first finished lane, loop_back inside a lane (lane-scoped
+# reset + {iteration}), routes inside a lane (no global route_stack frame),
+# the barrier + join index, and the trace viewer's lane containers with the
+# fork/join dividers.
+#
+# Run:  /riglane-run-workflow parallel-lanes-demo            (defaults: 2 topics, route picks "deep")
+# After running, open the trace viewer — the two lanes should render as
+# side-by-side orange containers between the fork and join dividers.
+#
+# Full semantics: workflow_learn(topic="lanes").
+# ─────────────────────────────────────────────────────────────────────────────
+name: parallel-lanes-demo
+version: 1
+description: >
+  Reference and self-test workflow for the lanes mechanism. A fork step
+  starts two concurrent lanes — a research lane that loops within itself
+  and a review lane that routes within itself — writing disjoint outputs
+  into the shared run dir; the engine joins them at the barrier
+  (require: all), writes the collection index, and an ordinary synthesize
+  step merges the lane outputs under a struct-validated schema.
+
+params:
+  - name: topics
+    description: >
+      How many research topics the plan should contain. The research lane
+      loops until all are processed (max_iterations 4 is the anti-runaway
+      budget; with the default of 2 the loop exits via the script decider).
+    required: false
+    default: 2
+
+gate:
+  structural: true
+  semantic: false
+  human: false
+  max_gate_retries: 2
+  max_step_retries: 1
+
+steps:
+  # ── Step 1: runs ONCE, before the fork ─────────────────────────────────────
+  - name: prepare
+    goal: >
+      Create the shared inputs both lanes consume. Write TWO JSON files:
+
+      1. data/topics.json — exactly {topics} research topics:
+         {"total": {topics},
+          "topics": [{"id": 1, "title": "topic-1"},
+                     {"id": 2, "title": "topic-2"}, ...]}
+         (ids are 1-based, titles follow the "topic-<id>" pattern).
+
+      2. data/research-progress.json — the research lane's progress registry,
+         initial state: {"total": {topics}, "processed": 0, "remaining": {topics}}
+
+      Write both files exactly as specified — the lanes and the loop decider
+      script parse them mechanically.
+    subagent: true
+    outputs:
+      - path: data/topics.json
+        struct: topics
+      - path: data/research-progress.json
+        struct: research-progress
+
+  # ── Step 2: THE FORK — two lanes start here, concurrently ──────────────────
+  # The step itself does honest work first (its gate must pass before the
+  # fork fires); the lanes: block below is evaluated at step_complete.
+  - name: fan-out
+    goal: >
+      Confirm the lane inputs are ready: read data/topics.json and
+      data/research-progress.json, then write data/fanout-check.md with two
+      lines — "topics: <total>" and "registry: ok". Do not modify any other
+      file; the lanes own their outputs.
+    subagent: true
+    outputs:
+      - path: data/fanout-check.md
+    lanes:
+      define:
+        # Lane 1: a two-step cycle that LOOPS within the lane until every
+        # topic is processed — the engine owns the repetition, exactly as it
+        # would in the main flow (the lane is a linear segment).
+        - id: research
+          steps:
+            - name: research-topic
+              goal: >
+                Process the next pending research topic.
+
+                1. Read data/research-progress.json — let N = processed
+                   (0-based index of the next pending topic).
+                2. Read data/topics.json and take topics[N].
+                3. "Research" it (this is a demo — simulate): OVERWRITE
+                   data/research-note.json with:
+                   {"topic_id": <id>, "title": "<title>",
+                    "finding": "<one short invented sentence>"}
+
+                Do not modify any other file — progress bookkeeping belongs
+                to the next step.
+              subagent: true
+              outputs:
+                - path: data/research-note.json
+                  struct: research-note
+            - name: record-research
+              goal: >
+                Record the research note and advance the registry.
+
+                1. Read data/research-note.json.
+                2. Write the per-iteration record file (the engine shows you
+                   its exact resolved path in the outputs section):
+                   {"topic_id": <id>, "title": "<title>",
+                    "finding": "<the finding>",
+                    "iteration": <the number from the resolved output path>}
+                3. Update data/research-progress.json: processed += 1,
+                   remaining -= 1 (total unchanged). OVERWRITE the file.
+
+                After this step the ENGINE decides whether the lane loops —
+                obey the action returned by step_complete.
+              subagent: true
+              outputs:
+                - path: data/research-record.json
+                  struct: research-record
+                  per_iteration: true
+                - path: data/research-progress.json
+                  struct: research-progress
+              loop_back:
+                to: research-topic
+                max_iterations: 4
+                when:
+                  # Deterministic decider — the engine runs this itself (from
+                  # the project root); {"loop": true|false} on stdout.
+                  script: "python .riglane/workflows/templates/examples/parallel-lanes-demo/scripts/check_remaining.py"
+
+        # Lane 2: a single review step that ROUTES within the lane — the
+        # chosen route's steps run inside the lane, then the lane ends.
+        - id: review
+          steps:
+            - name: review-inputs
+              goal: >
+                Review the shared inputs for the record. Read data/topics.json
+                and write data/review-verdict.json:
+                {"verdict": "deep", "note": "<one short sentence on the
+                 topics list>"} — the verdict value "deep" is REQUIRED here:
+                the demo's route decider reads it mechanically and the deep
+                route is the one this demo exercises.
+              subagent: true
+              outputs:
+                - path: data/review-verdict.json
+                  struct: review-verdict
+              routes:
+                when:
+                  script: "python .riglane/workflows/templates/examples/parallel-lanes-demo/scripts/pick_review.py"
+                define:
+                  - id: deep
+                    steps:
+                      - name: deep-review
+                        goal: >
+                          Write data/review-report.md — a short markdown
+                          report: a "# review" heading, one bullet per topic
+                          from data/topics.json, and a closing line
+                          "verdict: deep review complete".
+                        subagent: true
+                        outputs:
+                          - path: data/review-report.md
+                  - id: quick
+                    steps:
+                      - name: quick-review
+                        goal: >
+                          Write data/review-report.md with the single line
+                          "verdict: quick review complete".
+                        subagent: true
+                        outputs:
+                          - path: data/review-report.md
+      join:
+        require: all
+
+  # ── Step 3: after the join — an ORDINARY step is the "join logic" ─────────
+  # Inline (subagent: false): pure read-and-merge work. The engine has already
+  # written data/fan-out-join.json (the collection index); the lane outputs
+  # sit at their declared paths in the shared run dir.
+  - name: synthesize
+    goal: >
+      Merge the lane results. Read every data/research-record_*.json, the
+      final data/research-progress.json, data/review-report.md and the
+      engine's collection index data/fan-out-join.json, then write
+      data/final.json:
+      {"topics_processed": <processed from the registry>,
+       "research_iterations": <count of research-record_*.json files>,
+       "review_verdict": "<the closing verdict line from review-report.md>",
+       "join_require": "<require from fan-out-join.json>",
+       "lanes_completed": <count of lanes with verdict "completed" in the
+        join index>}
+    subagent: false
+    inputs:
+      - path: data/research-record_*.json
+        inject: reference
+      - path: data/research-progress.json
+        inject: reference
+      - path: data/review-report.md
+        inject: reference
+      - path: data/fan-out-join.json
+        inject: reference
+    outputs:
+      - path: data/final.json
+        struct: final

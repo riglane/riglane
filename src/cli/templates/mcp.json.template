@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "workflow_engine": {
+      "type": "stdio",
+      "command": "riglane",
+      "args": ["mcp-server"]
+    },
+    "workflow_tools": {
+      "type": "stdio",
+      "command": "riglane",
+      "args": ["mcp-tools"]
+    }
+  }
+}

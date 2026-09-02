@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="360" viewBox="0 0 880 360" role="img" aria-label="The Inbox: a human-gate question card with choices and Approve/Reject; answers arrive from the Studio, from your own app via webhook, or from a terminal dialog — all through the one Local API endpoint; the recorded answer resumes the run.">
+  <rect width="880" height="360" rx="14" fill="#f4f2ec"/>
+  <defs>
+    <marker id="ia" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#6b6455"/>
+    </marker>
+  </defs>
+
+  <!-- the three ways an answer arrives -->
+  <g font-family="ui-monospace,Consolas,monospace" font-size="12.5" font-weight="600" fill="#26221a" text-anchor="middle">
+    <rect x="16" y="44" width="196" height="44" rx="10" fill="#fbfaf6" stroke="#d8d2c4"/>
+    <text x="114" y="63">Workflow Studio</text>
+    <text x="114" y="79" font-size="10.5" font-weight="400" fill="#6b6455">Messages tab</text>
+    <rect x="16" y="128" width="196" height="44" rx="10" fill="#fbfaf6" stroke="#d8d2c4"/>
+    <text x="114" y="147">your own app</text>
+    <text x="114" y="163" font-size="10.5" font-weight="400" fill="#6b6455">webhook envelope in / POST back</text>
+    <rect x="16" y="212" width="196" height="44" rx="10" fill="#fbfaf6" stroke="#d8d2c4"/>
+    <text x="114" y="231">terminal dialog</text>
+    <text x="114" y="247" font-size="10.5" font-weight="400" fill="#6b6455">the engine's own, not the agent's</text>
+  </g>
+
+  <!-- the one endpoint -->
+  <g stroke="#6b6455" stroke-width="1.8" fill="none">
+    <path d="M212 66 C 240 66, 240 140, 268 146"/>
+    <path d="M212 150 h56"/>
+    <path d="M212 234 C 240 234, 240 160, 268 154"/>
+  </g>
+  <rect x="270" y="128" width="118" height="44" rx="10" fill="#26221a"/>
+  <text x="329" y="147" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="12" font-weight="700" fill="#f4f2ec">Local API</text>
+  <text x="329" y="163" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="10" fill="#948c7a">the only way in</text>
+  <path d="M388 150 h34" stroke="#6b6455" stroke-width="2" marker-end="url(#ia)"/>
+
+  <!-- the inbox card -->
+  <g>
+    <rect x="426" y="40" width="336" height="234" rx="14" fill="#fbfaf6" stroke="#a06b2a" stroke-width="1.6"/>
+    <rect x="446" y="58" width="92" height="20" rx="6" fill="#f3e9d2"/>
+    <text x="492" y="72" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="10.5" font-weight="700" fill="#a06b2a">HUMAN GATE</text>
+    <text x="446" y="102" font-family="Inter,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#26221a">Approve MSFT portfolio decision?</text>
+    <text x="446" y="122" font-family="Inter,Segoe UI,sans-serif" font-size="11.5" fill="#6b6455">The verified decision is Underweight: stage a trim to</text>
+    <text x="446" y="137" font-family="Inter,Segoe UI,sans-serif" font-size="11.5" fill="#6b6455">50–70% of normal exposure. Artifacts attached.</text>
+    <!-- choices -->
+    <g font-family="Inter,Segoe UI,sans-serif" font-size="12.5" fill="#26221a">
+      <rect x="446" y="152" width="14" height="14" rx="4" fill="#4a6741"/>
+      <path d="M449,159 l3,3 l6,-7" stroke="#fbfaf6" stroke-width="2" fill="none" stroke-linecap="round"/>
+      <text x="468" y="164">approve as proposed</text>
+      <rect x="446" y="175" width="14" height="14" rx="4" fill="none" stroke="#d8d2c4" stroke-width="1.6"/>
+      <text x="468" y="187" fill="#6b6455">approve, but cap exposure lower</text>
+      <rect x="446" y="198" width="14" height="14" rx="4" fill="none" stroke="#d8d2c4" stroke-width="1.6"/>
+      <text x="468" y="210" fill="#6b6455">send back with feedback</text>
+    </g>
+    <!-- buttons -->
+    <rect x="446" y="228" width="92" height="28" rx="8" fill="#4a6741"/>
+    <text x="492" y="246" text-anchor="middle" font-family="Inter,Segoe UI,sans-serif" font-size="12.5" font-weight="700" fill="#fbfaf6">Approve</text>
+    <rect x="548" y="228" width="80" height="28" rx="8" fill="none" stroke="#d8d2c4" stroke-width="1.4"/>
+    <text x="588" y="246" text-anchor="middle" font-family="Inter,Segoe UI,sans-serif" font-size="12.5" fill="#6b6455">Reject</text>
+  </g>
+
+  <!-- the record + resume -->
+  <path d="M594 274 v22" stroke="#6b6455" stroke-width="1.8" marker-end="url(#ia)"/>
+  <rect x="426" y="300" width="336" height="34" rx="10" fill="#f3e9d2"/>
+  <text x="594" y="321" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="10.2" font-weight="600" fill="#7a5a22">recorded: who · what · when · channel → the run resumes</text>
+
+  <!-- durability note -->
+  <text x="114" y="300" font-family="ui-monospace,Consolas,monospace" font-size="10.5" fill="#948c7a">the card waits durably —</text>
+  <text x="114" y="315" font-family="ui-monospace,Consolas,monospace" font-size="10.5" fill="#948c7a">hours or days, across restarts</text>
+  <text x="108" y="290" font-size="0"> </text>
+</svg>

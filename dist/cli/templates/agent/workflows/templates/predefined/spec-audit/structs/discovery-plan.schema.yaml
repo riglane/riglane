@@ -1,0 +1,70 @@
+name: discovery-plan
+description: >
+  Output of the DISCOVER step — the resolved audit set: which specs to audit
+  (enumerated from _index.json, active + generic), the implementing source files
+  discovered per spec (registry hint + applies_to area-search), and
+  per-domain grouping. Reviewed by the user via the human gate before REVIEW.
+format: json
+
+json_schema:
+  required_fields:
+    - field: workflow
+      type: string
+    - field: discovered_at
+      type: string
+    - field: target_scope
+      type: string
+    - field: scopes_audited
+      type: array
+      description: >
+        Scope ids whose specs are loaded — typically [<target_scope>,
+        "generic"], or every declared scope when target_scope == "all".
+    - field: filters
+      type: object
+      description: >
+        Applied audit-scoping (domain / spec_id / applies_to); an empty object
+        means audit everything.
+    - field: summary
+      type: object
+    - field: summary.total_specs
+      type: number
+    - field: summary.total_domains
+      type: number
+    - field: summary.total_files
+      type: number
+    - field: domains
+      type: array
+    - field: domains[].name
+      type: string
+    - field: domains[].status
+      type: string
+      enum: [pending, completed, skipped]
+      description: >
+        MUST be "pending" when DISCOVER writes the plan; the REVIEW fan-out keys
+        on domains[status=pending].
+    - field: domains[].specs
+      type: array
+    - field: domains[].specs[].spec_id
+      type: string
+    - field: domains[].specs[].source_scope
+      type: string
+      description: >
+        Which scope the spec came from — lets REVIEW read it from the right
+        scope directory.
+    - field: domains[].specs[].title
+      type: string
+    - field: domains[].specs[].spec_file
+      type: string
+    - field: domains[].specs[].implementation_files
+      type: array
+    - field: domains[].specs[].registry_status
+      type: string
+      enum: [mapped, no_registry_mapping, no_implementation_files]
+    - field: domains[].estimated_files
+      type: number
+    - field: warnings
+      type: array
+
+file_checks:
+  exists: true
+  min_size: 100

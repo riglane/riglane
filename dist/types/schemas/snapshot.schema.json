@@ -1,0 +1,76 @@
+{
+    "$schema": "https://json-schema.org/draft-07/schema#",
+    "$id": "riglane-snapshot-v1",
+    "title": "Riglane Pre-Step Output Snapshot",
+    "description": "Schema for snapshot files at <runtime_dir>/data/.snapshots/<step>.json. Created by step_begin; read by output validator at step completion to enforce write-proof. The snapshot captures fingerprints (mtime + sha256 + size) of all output files BEFORE the subagent runs.",
+    "type": "object",
+    "required": ["step", "created_at", "global", "branches"],
+    "additionalProperties": false,
+    "properties": {
+        "step": {
+            "type": "string",
+            "description": "Step name this snapshot belongs to."
+        },
+        "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 timestamp when the snapshot was captured. Set on first creation; preserved across step retries (idempotent)."
+        },
+        "global": {
+            "type": "object",
+            "description": "Map of output path templates (as declared in workflow.yaml) to their write_proof mode and per-resolved-path baseline fingerprints. For non-parallel steps, this contains all outputs.",
+            "additionalProperties": { "$ref": "#/definitions/outputSnapshot" }
+        },
+        "branches": {
+            "type": "object",
+            "description": "Per-branch snapshots for parallel steps. Keys are branch indices (string-encoded integers). Each branch records its branch_dir and its own outputs map. Empty object {} for non-parallel steps.",
+            "additionalProperties": {
+                "type": "object",
+                "required": ["branch_dir", "outputs"],
+                "additionalProperties": false,
+                "properties": {
+                    "branch_dir": {
+                        "type": "string",
+                        "description": "Branch-specific working directory (e.g., '_branch_0')."
+                    },
+                    "outputs": {
+                        "type": "object",
+                        "additionalProperties": { "$ref": "#/definitions/outputSnapshot" }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "outputSnapshot": {
+            "type": "object",
+            "required": ["write_proof", "baseline"],
+            "additionalProperties": false,
+            "description": "Per-output snapshot: the resolved write_proof mode and baseline fingerprints for every file currently matched by the path template.",
+            "properties": {
+                "write_proof": {
+                    "type": "string",
+                    "enum": ["required", "all_members_fresh", "any_member"],
+                    "description": "Effective write_proof mode after defaulting (explicit paths default to 'required'; glob paths default to 'all_members_fresh'). Outputs with write_proof: 'off' are not snapshotted."
+                },
+                "baseline": {
+                    "type": "object",
+                    "description": "Map of resolved file path -> fingerprint dict. Captures the state of each file at snapshot time.",
+                    "additionalProperties": { "$ref": "#/definitions/fileFingerprint" }
+                }
+            }
+        },
+        "fileFingerprint": {
+            "type": "object",
+            "required": ["exists", "mtime", "sha256", "size"],
+            "additionalProperties": false,
+            "description": "File fingerprint at snapshot time. exists=false means the path resolved to nothing (file was absent). When exists=true, mtime/sha256/size MUST be populated unless the file was unreadable (in which case sha256 MAY be null).",
+            "properties": {
+                "exists": { "type": "boolean" },
+                "mtime": { "type": ["number", "null"], "description": "POSIX mtime (float seconds since epoch). Null if file did not exist at snapshot." },
+                "sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$", "description": "Lowercase hex SHA-256 of file contents. Null if file was absent or unreadable." },
+                "size": { "type": ["integer", "null"], "minimum": 0 }
+            }
+        }
+    }
+}

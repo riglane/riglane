@@ -1,0 +1,208 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "$id": "riglane-struct-v1",
+  "title": "Riglane Struct Schema (Meta-Schema)",
+  "description": "Meta-schema describing valid struct schema files (used by workflow.yaml outputs[].struct references). Two styles are supported: 'Standard JSON Schema style' (recommended; type:object + required + properties) and 'Custom format style' (legacy; explicit format: json|markdown|yaml + json_schema/frontmatter/required_sections). All struct files SHOULD declare name and description at top level.",
+
+  "type": "object",
+  "$comment": "additionalProperties is FALSE at top level on purpose: an unrecognized key here is silent, total loss of validation, not a harmless extra. The reader keys field definitions off `properties` exactly, so a near-miss like `fields:` leaves properties = {} — the required-presence loop still runs (the schema LOOKS alive) while every type/enum/pattern/min_items constraint is never read. Three shipped tools-demo schemas sat like that for three months. Nested blocks stay open where the reader tolerates extras.",
+  "additionalProperties": false,
+
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Convention: struct identifier (matches the basename of <name>.schema.yaml and the value referenced from workflow.yaml outputs[].struct). Not enforced by the validator but expected by tooling."
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable description of what this struct represents."
+    },
+    "version": {
+      "description": "Optional author-facing schema version. Not interpreted by the validator; carried for human bookkeeping."
+    },
+
+    "file_checks": { "$ref": "#/definitions/fileChecks" },
+
+    "format": { "type": "string", "enum": ["json", "yaml", "markdown", "text"] },
+
+    "type": { "const": "object", "description": "Standard-style discriminator: when type=object + required/properties is present, format is auto-detected as json." },
+    "required": { "type": "array", "items": { "type": "string" } },
+    "properties": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/definitions/standardField" }
+    },
+
+    "json_schema": {
+      "type": "object",
+      "description": "Custom-style: validation rules for JSON files. Used when format: json is set explicitly.",
+      "additionalProperties": false,
+      "properties": {
+        "required_fields": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/customField" }
+        },
+        "optional_fields": {
+          "type": "array",
+          "description": "Informational: documents fields that MAY be present without being required. Not enforced by the current validator (schema_validate.py ignores this block); kept for documentation purposes.",
+          "items": { "$ref": "#/definitions/customField" }
+        }
+      }
+    },
+
+    "yaml_schema": {
+      "type": "object",
+      "description": "Custom-style: validation rules for YAML files. Used when format: yaml is set explicitly.",
+      "additionalProperties": false,
+      "properties": {
+        "required_fields": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/customField" }
+        },
+        "optional_fields": {
+          "type": "array",
+          "description": "Informational: documents fields that MAY be present. Not enforced by current validator.",
+          "items": { "$ref": "#/definitions/customField" }
+        }
+      }
+    },
+
+    "frontmatter": {
+      "type": "object",
+      "description": "Markdown-style: validation rules for YAML frontmatter. Used when format: markdown is set.",
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/frontmatterField" }
+        },
+        "optional": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/frontmatterField" }
+        }
+      }
+    },
+
+    "required_sections": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Markdown-style: required '## Heading' section names (without the leading '##')."
+    }
+  },
+
+  "anyOf": [
+    {
+      "$comment": "Standard JSON Schema style: declares type:object + required and/or properties.",
+      "required": ["type"],
+      "properties": { "type": { "const": "object" } },
+      "anyOf": [
+        { "required": ["required"] },
+        { "required": ["properties"] }
+      ]
+    },
+    {
+      "$comment": "Custom format style: declares explicit format with matching companion block.",
+      "required": ["format"],
+      "anyOf": [
+        { "properties": { "format": { "const": "json" } }, "required": ["json_schema"] },
+        { "properties": { "format": { "const": "yaml" } }, "required": ["yaml_schema"] },
+        { "properties": { "format": { "const": "markdown" } }, "anyOf": [
+          { "required": ["frontmatter"] },
+          { "required": ["required_sections"] }
+        ] },
+        { "properties": { "format": { "const": "text" } } }
+      ]
+    },
+    {
+      "$comment": "File-checks-only struct (existence + size, no content schema).",
+      "required": ["file_checks"]
+    }
+  ],
+
+  "definitions": {
+
+    "fileChecks": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "File-level checks applied regardless of format.",
+      "properties": {
+        "exists": {
+          "type": "boolean",
+          "default": true,
+          "description": "Require the file to exist. Default: true."
+        },
+        "min_size": { "type": "integer", "minimum": 0 },
+        "max_size": { "type": "integer", "minimum": 0 },
+        "name_pattern": {
+          "type": "string",
+          "description": "Regex matched against file basename only."
+        }
+      }
+    },
+
+    "standardField": {
+      "type": "object",
+      "description": "Field schema in JSON Schema style. Recursive: nested objects/arrays use the same definition.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["string", "integer", "number", "boolean", "array", "object", "list"]
+        },
+        "enum": { "type": "array" },
+        "pattern": { "type": "string" },
+        "min_items": { "type": "integer", "minimum": 0 },
+        "minimum": { "type": "number", "description": "Numeric lower bound (inclusive)." },
+        "maximum": { "type": "number", "description": "Numeric upper bound (inclusive)." },
+        "minLength": { "type": "integer", "minimum": 0, "description": "String minimum length." },
+        "maxLength": { "type": "integer", "minimum": 0, "description": "String maximum length." },
+        "required": { "type": "array", "items": { "type": "string" } },
+        "properties": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/standardField" }
+        },
+        "items": { "$ref": "#/definitions/standardField" },
+        "description": { "type": "string" }
+      }
+    },
+
+    "customField": {
+      "type": "object",
+      "required": ["field"],
+      "description": "Field declaration in custom format style. Supports dot notation (metadata.name) and array notation (tasks[].domain, tasks[].items[].id for nested).",
+      "properties": {
+        "field": {
+          "type": "string",
+          "description": "Field path. Use dots for nested objects, '[]' as an array marker. Examples: 'metadata.name', 'tasks[].domain', 'domains[].requirements[].title'."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["string", "integer", "number", "boolean", "array", "object", "list", "enum"]
+        },
+        "pattern": { "type": "string" },
+        "enum": { "type": "array" },
+        "min_items": { "type": "integer", "minimum": 0 },
+        "values": { "type": "array", "description": "Alias for enum (used in some legacy specs)." },
+        "description": { "type": "string" }
+      }
+    },
+
+    "frontmatterField": {
+      "type": "object",
+      "required": ["field"],
+      "description": "Frontmatter field declaration. Supports the cross-field 'body_match_section' check that requires the field's value to appear literally in a named ## section of the markdown body (RFC2119-style validator pattern).",
+      "properties": {
+        "field": { "type": "string" },
+        "type": {
+          "type": "string",
+          "enum": ["string", "integer", "number", "boolean", "list", "enum"]
+        },
+        "pattern": { "type": "string" },
+        "values": { "type": "array" },
+        "body_match_section": {
+          "type": "string",
+          "description": "When set, the field's value MUST appear literally (case-insensitive) in the body of the named ## section. Cross-field consistency check."
+        },
+        "description": { "type": "string" }
+      }
+    }
+  }
+}

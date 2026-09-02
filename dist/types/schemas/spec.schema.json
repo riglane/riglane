@@ -1,0 +1,81 @@
+{
+    "name": "spec",
+    "description": "Canonical behavioral-spec schema — engine-bundled, single source of truth. A spec is one requirement per file: YAML frontmatter + Markdown body, stored at .riglane/specs/<scope>/<domain>/<spec_id>.md. Describes the POST-MINT (stored-file) shape. Dual-use: spec_write validates committed specs against it (file-by-file); the engine composes the 'Spec format' section of step_begin authoring guidance FROM it. This is a struct-schema INSTANCE (format: markdown), NOT an ajv meta-schema. Do NOT copy per-workflow or per-project. Design: sub_tasks/spec-system-revision/design/spec-system.md §3.1 / §3.1a / §3.2.",
+    "format": "markdown",
+    "frontmatter": {
+        "required": [
+            {
+                "field": "spec_id",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*-\\d{3}$",
+                "description": "Engine-minted identity <domain>-<NNN> (e.g. auth-001). Serial NNN is assigned by the engine after dedup — the agent never supplies it on create. Present in the stored file; validated on read/update/commit. (spec_write exempts this from the pre-mint pass.)"
+            },
+            {
+                "field": "domain",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+                "description": "Cohesive subsystem grouping (e.g. auth, ui, rate-limit). lowercase, prefer one word, max ~2 hyphenated, ~20 chars, readable not cryptic. Becomes the spec_id prefix."
+            },
+            {
+                "field": "title",
+                "type": "string",
+                "description": "One-line human title of the requirement (the spec's name)."
+            },
+            {
+                "field": "summary",
+                "type": "string",
+                "description": "Mandatory one-sentence hint of WHAT the spec requires. The engine copies it verbatim into _index.json as the search/scan discriminator."
+            },
+            {
+                "field": "applies_to",
+                "type": "list",
+                "description": "Authorial INTENT of scope (broad hint, NOT a closed file list): areas, components, behaviors, or path patterns the spec governs. Powers discovery (area-search) and dedup topology."
+            },
+            {
+                "field": "scope",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*$",
+                "description": "The single scope this spec belongs to (e.g. generic, or a declared scope). A spec lives in exactly one scope — its directory. SINGLE value, not a list (legacy multi-scope removed in v1). Engine validates scope == the directory it is stored in."
+            },
+            {
+                "field": "created_at",
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "description": "Engine-set creation date (ISO YYYY-MM-DD)."
+            },
+            {
+                "field": "updated_at",
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "description": "Engine-set last-update date (ISO YYYY-MM-DD)."
+            }
+        ],
+        "optional": [
+            {
+                "field": "source_sections",
+                "type": "list",
+                "description": "Citations into the source document (e.g. '4.2 Rate Limits'). Strong dedup signal for extraction; absent for specs authored without a source document."
+            },
+            {
+                "field": "related_specs",
+                "type": "list",
+                "description": "Cross-references to other specs. Bare id = same scope; qualified (web:auth-002) = cross-scope reference (a reference, not membership). May carry temp-keys during bulk authoring; the engine resolves them."
+            },
+            {
+                "field": "domain_description",
+                "type": "string",
+                "description": "One-line description of the domain. Required ONLY when this spec introduces a NEW domain (enforced by spec_write, not here — a conditional the struct cannot express); ignored for an existing domain."
+            }
+        ]
+    },
+    "required_sections": [
+        "Rule Statement",
+        "Validation Criteria",
+        "Source Reference"
+    ],
+    "file_checks": {
+        "exists": true,
+        "min_size": 200,
+        "name_pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*-\\d{3}\\.md$"
+    }
+}

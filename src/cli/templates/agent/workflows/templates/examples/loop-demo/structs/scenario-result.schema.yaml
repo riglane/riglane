@@ -1,0 +1,18 @@
+name: scenario-result
+description: >
+  Output of run-scenario — the CURRENT pass's execution result.
+  Deliberately a current-state file: each iteration OVERWRITES it
+  (contrast with the per_iteration record files written by record-result).
+format: json
+
+json_schema:
+  required_fields:
+    - field: scenario_id
+      type: number
+    - field: title
+      type: string
+    - field: status
+      type: string
+      enum: [passed, failed]
+    - field: detail
+      type: string

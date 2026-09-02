@@ -1,0 +1,78 @@
+# Riglane — Codex project configuration.
+#
+# Written by `riglane init --codex` / `riglane update`. Loaded by Codex only when the
+# project is trusted (Codex prompts to trust on first run; `riglane doctor` warns if
+# untrusted). Safe to edit your own keys around these blocks — `riglane update`
+# merges additively and only rewrites these tables on `--force`.
+
+# ── MCP servers ────────────────────────────────────────────────────────────
+# Expose the Riglane workflow engine + script tools to Codex. `command = "riglane"`
+# resolves on PATH (verified on Windows under Codex — no .cmd wrapper needed).
+# Codex surfaces these tools by BARE name (e.g. `workflow_learn`), not
+# `mcp__server__tool`.
+[mcp_servers.workflow_engine]
+command = "riglane"
+args = ["mcp-server"]
+
+[mcp_servers.workflow_tools]
+command = "riglane"
+args = ["mcp-tools"]
+
+# ── Agents (spawn depth) ─────────────────────────────────────────────────────
+# A step subagent must not spawn its own subagents — the gate and the trace
+# follow exactly the worker the orchestrator seeded, and a nested agent's stop
+# would fire validation hooks against outputs it does not own. Codex enforces
+# this at the host level: max_depth = 1 lets the root session (the
+# orchestrator) spawn direct children (the step workers) while preventing
+# those children from spawning deeper descendants. 1 is Codex's documented
+# default; it is PINNED here so the ban is declared intent rather than an
+# inherited default that a future Codex release could change.
+# (Known upstream gap: codex 0.144.1 was reported to let a grandchild through
+# despite max_depth = 1 — openai/codex#32027, open at the time of writing. The
+# pin states the contract; the engine additionally instructs every worker not
+# to spawn, and the gate ignores stops that are not the seeded worker.)
+[agents]
+max_depth = 1
+
+# ── Hooks ──────────────────────────────────────────────────────────────────
+# SubagentStop = the PRIMARY structural gate for subagent steps. It fires
+# host-side the moment a spawned subagent stops; `riglane gate-check` validates the
+# step's outputs and, on failure, bounces the subagent back (exit 2 + stderr) to
+# retry in-session. The engine-inline gate remains the safety net if
+# the hook does not fire. `--host codex` tells gate-check the host explicitly —
+# Codex's SubagentStop payload is shaped identically to Claude Code's, so
+# payload sniffing alone cannot tell them apart.
+#
+# No `matcher` → matches every subagent stop (our workers are generic-agent
+# spawns with no named agent_type).
+[[hooks.SubagentStop]]
+
+[[hooks.SubagentStop.hooks]]
+type = "command"
+command = "riglane gate-check --host codex"
+
+# ── Tool-call logger (tool-trace) ────────────────────────────────────────────
+# PostToolUse fires per tool call; `riglane tool-call-logger` appends one compact
+# JSONL line to the per-run tool-events.jsonl ledger, which the engine folds into
+# the trace (tagged with the step). No `matcher` → captures every tool call (the
+# logger drops read-only built-ins and the engine control-plane).
+#
+# HOOK TRUST: Codex silently skips untrusted hooks — trust is per hook entry
+# (hash-pinned) in the GLOBAL ~/.codex/config.toml, and project trust does NOT
+# cover it. `riglane init`/`riglane update` persists the trust entries for these riglane
+# hooks automatically, and `riglane doctor` re-checks them (--fix repairs). If you
+# edit a hook `command` here by hand, its hash changes — re-run `riglane update`
+# (or doctor --fix) to re-trust, or approve it in the Codex `/hooks` UI.
+#
+# `matcher = ".*"` is the form verified to fire PostToolUse on Codex;
+# catch-all (the logger drops reads + engine control-plane calls). Live-verified
+# coverage (codex 0.142.5): Bash, apply_patch, external MCP calls made INSIDE a
+# spawned subagent (tool_name arrives prefixed, `mcp__<server>__<tool>`), and
+# the multi-agent suite itself (spawn_agent / multi_agent_v1wait_agent /
+# multi_agent_v1close_agent).
+[[hooks.PostToolUse]]
+matcher = ".*"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "riglane tool-call-logger --host codex"

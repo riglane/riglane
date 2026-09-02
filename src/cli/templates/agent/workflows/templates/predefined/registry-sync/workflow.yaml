@@ -1,0 +1,307 @@
+name: registry-sync
+version: 2
+description: >
+  Reconcile the spec→code registry (_registry.json) with reality. Performs a
+  full analysis of WHICH source file implements WHICH spec — tracing direct and
+  indirect relationships — then diffs against the current registry to surface
+  untracked implementations and stale entries. Scope-aware: reconciles the
+  active scope plus generic, and (advisory) flags specs whose implementing code
+  looks like it belongs to a DIFFERENT scope, and domain-structure redesign
+  opportunities. The user approves every change at a human gate; the engine
+  applies them via spec_link — the registry is NEVER hand-edited.
+
+params:
+  - name: scope
+    description: >
+      Which spec scope to reconcile — "generic", "all", or a scope id declared
+      in _scope-config.json. The implicit "generic" scope is always included
+      alongside the selected scope. "all" reconciles every declared scope.
+      Default: "generic" (safe for projects without _scope-config.json).
+      Consider passing the active scope explicitly when the project has one.
+    required: false
+    default: "generic"
+
+  - name: domain
+    description: >
+      Filter the reconciliation to a single domain. If omitted, all domains
+      in the selected scope(s) are reconciled.
+    required: false
+
+  - name: spec_id
+    description: >
+      Filter to a single spec by spec_id (format "<domain>-NNN"). Most specific
+      filter — overrides domain if both are set.
+    required: false
+
+  - name: search_paths
+    description: >
+      Optional comma-separated directories to limit the code scan (e.g.,
+      "src/,lib/"). If omitted, the whole project is scanned (excluding
+      node_modules/, .riglane/, .cursor/, dist/, build/).
+    required: false
+
+gate:
+  structural: true
+  semantic: true
+  human: false
+  max_gate_retries: 5
+  max_step_retries: 3
+
+context:
+  carry_forward: summary
+
+steps:
+  # ──────────────────────────────────────────────
+  # Step 1: DISCOVER
+  # Resolve the sync set — which specs, in which scopes, with their CURRENT
+  # registry mappings and the scope coverage hints. Planning only (no code
+  # reading, no writes).
+  # ──────────────────────────────────────────────
+  - name: discover
+    spec_check: false
+    goal: >
+      Determine the reconciliation set: which specs to reconcile, their current
+      registry mappings, and the scope coverage hints SCAN will judge against.
+      This is a PLANNING step — resolve metadata; do NOT read source code yet
+      and do NOT write anything.
+
+      **READ-ONLY.**
+
+      **Step-by-step:**
+
+      1. Resolve the scope set:
+         - scope == "all" → read .riglane/specs/_scope-config.json and enumerate every
+           declared scope; always include "generic".
+         - otherwise the set is [<scope>, "generic"] (deduped).
+
+      2. Enumerate specs. For each scope in the set, read
+         .riglane/specs/<scope>/_index.json and collect its active specs (spec_id,
+         domain, title, path, applies_to), annotating each with its source scope.
+         Apply filters (most specific wins): spec_id → that one spec (if not
+         found, list the 3 closest and STOP); else domain → that domain; else
+         all specs.
+
+      3. Read each scope's .riglane/specs/<scope>/_registry.json and attach every
+         spec's CURRENT implemented_by entries ({file, role}) as registered_files
+         (empty array when the spec has no mapping yet).
+
+      4. Collect scope coverage hints: read _scope-config.json and build
+         scope_hints = { <scope id>: <hint> } for every scope in the set that
+         declares a `hint`. These describe what each scope covers (and what
+         belongs elsewhere) — SCAN uses them for the cross-scope analysis. If no
+         hints are recorded, write an empty object and note it in warnings (the
+         cross-scope analysis will be weaker — suggest the user add hints via
+         `riglane scope hint`).
+
+      5. Group specs by domain. For each domain: name, status "pending", and its
+         specs (spec_id, source_scope, title, spec_file, applies_to,
+         registered_files).
+
+      6. Produce discovery-plan.json: target_scope, scopes_synced, filters,
+         summary (total specs / domains / current mappings), domains,
+         scope_hints, warnings.
+
+      Present a clear summary of what will be reconciled.
+    subagent: true
+    inputs:
+      - path: ".riglane/specs/_scope-config.json"
+        inject: file_if_exists
+      - path: ".riglane/specs/{scope}/_index.json"
+        inject: file_if_exists
+      - path: ".riglane/specs/{scope}/_registry.json"
+        inject: file_if_exists
+      - path: ".riglane/specs/generic/_index.json"
+        inject: file_if_exists
+      - path: ".riglane/specs/generic/_registry.json"
+        inject: file_if_exists
+    outputs:
+      - path: "data/{run_id}-discovery-plan.json"
+        struct: discovery-plan
+
+  # ──────────────────────────────────────────────
+  # Step 2: SCAN
+  # Parallel per-domain implementation discovery. For each spec, find the code
+  # that implements it, map to a spec role, diff against the current registry.
+  # Advisory cross-scope analysis using the coverage hints. READ-ONLY.
+  # ──────────────────────────────────────────────
+  - name: scan
+    spec_check: false
+    goal: >
+      For the assigned domain, discover WHICH source files implement each spec
+      and diff against the current registry.
+
+      **READ-ONLY** — never modify any source, spec, or registry file.
+
+      **For EACH spec in this domain:**
+
+      1. Read the spec file (.riglane/specs/<source_scope>/<domain>/<spec_id>.md) —
+         its Rule Statement, Validation Criteria, and applies_to.
+
+      2. Discover the implementing code (the registry is a HINT, not the only
+         channel). Area-search the codebase for the spec's applies_to area
+         and component-name variants (PascalCase / kebab-case / snake_case),
+         honoring the search_paths filter and excluding node_modules/, .riglane/,
+         .cursor/, dist/, build/. Trace BOTH:
+         - direct implementations (the file that produces the behavior);
+         - indirect relationships — modules it imports for spec-relevant logic,
+           modules that import it and relay the behavior, config/constants files
+           with spec-mentioned values, and tests that verify the requirement.
+
+      3. Assign each found file a spec role (the spec_link vocabulary):
+         implements = produces the behavior (the primary file);
+         configures = sets constrained values the spec bounds;
+         verifies    = tests the requirement;
+         uses        = consumes the spec's contract;
+         affects     = indirect dependency that must be re-checked on change.
+
+      4. Diff against this spec's registered_files (from the discovery plan):
+         - a found file NOT registered (or registered with a different role) →
+           new_matches[] entry {file, role, confidence (high/medium/low),
+           reason — the traced relationship, not a bare name hit};
+         - a registered file that no longer exists, or that no longer relates to
+           the spec → stale_entries[] {file, reason}.
+
+      5. **Cross-scope analysis (advisory).** Using scope_hints from the
+         discovery plan, judge whether the spec's implementing code actually
+         lives in THIS scope's remit. If the code sits predominantly in another
+         scope's area (its coverage hint matches better), or the behavior is
+         cross-integration (→ generic), record a scope_findings[] entry
+         {spec_id, current_scope, suggested_scope, rationale — where the code
+         lives + which coverage it fits}. Do NOT move anything — this is a note
+         for the human. When no scope_hints are available, skip this analysis
+         (it is unreliable without them) and leave scope_findings empty.
+
+      Produce scan-result.json for this domain: domain, source_scope,
+      specs_scanned, results[] (per spec: spec_id, new_matches, stale_entries),
+      and scope_findings[].
+    subagent: true
+    parallel: true
+    parallel_key: "discovery-plan.domains[status=pending]"
+    parallel_spawn_delay_ms: 5000
+    inputs:
+      - path: "data/{run_id}-discovery-plan.json"
+        struct: discovery-plan
+      - path: ".riglane/specs/{scope}/{domain}/*.md"
+        inject: file_if_exists
+      - path: ".riglane/specs/generic/{domain}/*.md"
+        inject: file_if_exists
+    outputs:
+      # Per-branch identity via {parallel_key.name} (domain of THIS branch's
+      # item) — NOT the {domain} filter param (one value → all branches collide).
+      # REVIEW reads data/scans/{run_id}-*-scan-result.json (glob unaffected).
+      - path: "data/scans/{run_id}-{parallel_key.name}-scan-result.json"
+        struct: scan-result
+
+  # ──────────────────────────────────────────────
+  # Step 3: REVIEW
+  # Consolidate the per-domain scans, present the proposed change set + the
+  # advisory sections, and get the user's approval. Human gate.
+  # ──────────────────────────────────────────────
+  - name: review
+    spec_check: false
+    goal: >
+      Consolidate every SCAN result into ONE change set for the user to approve.
+
+      **READ-ONLY** — you propose; REGISTER applies after approval.
+
+      **Step-by-step:**
+
+      1. Collect all data/scans/*-scan-result.json. Aggregate new_matches,
+         stale_entries, and scope_findings across domains.
+
+      2. Present the findings to the user, grouped by spec, clearly:
+
+         **messaging-003** (messaging)
+         Currently registered:
+           • src/msg/Queue.ts (implements)
+         NEW MATCHES:
+           ✚ src/msg/QueueConfig.ts   [high]   configures — sets MAX_QUEUE the spec bounds
+           ✚ src/msg/Queue.test.ts    [high]   verifies   — asserts the size limit
+         STALE ENTRIES:
+           ✖ src/old/Queue.legacy.ts  — file no longer exists
+
+      3. Ask the user which to apply:
+         - which new_matches to ADD (default: all high-confidence);
+         - which stale_entries to REMOVE (default: all);
+         - any manual additions/removals the user specifies.
+         Build additions[] {spec_id, scope, file, role} and removals[]
+         {spec_id, scope, file, reason} from what the user approves. `scope` is
+         the spec's source scope (spec_link writes to that scope's registry).
+
+      4. **Advisory — surface, do NOT apply:**
+         - scope_findings: consolidate the cross-scope notes. Present them as
+           "these specs may belong to a different scope" — the user decides
+           separately, then applies with spec_write(op:move, ... to_scope: <target>).
+         - redesign_proposals: judge whether the reconciled corpus shows the
+           domain layout no longer fits (a domain grown too broad → split; near-
+           synonym or sparse siblings → merge; a spec clearly in the wrong domain
+           → move; a stale domain name → rename). Ground each in the actual
+           specs (cite ids/domains). Empty when the layout is fine or there are
+           too few specs to judge.
+
+      5. Write registry-changes.json: workflow, reviewed_at, target_scope,
+         additions, removals, scope_findings, redesign_proposals.
+
+      **DO NOT proceed to REGISTER until the user confirms the change set.** The
+      advisory sections are decisions for the USER, not blockers.
+    subagent: true
+    inputs:
+      - path: "data/scans/{run_id}-*-scan-result.json"
+        inject: reference
+      - path: "data/{run_id}-discovery-plan.json"
+        inject: reference
+    outputs:
+      - path: "data/{run_id}-registry-changes.json"
+        struct: registry-changes
+    gate:
+      structural: true
+      human: true
+
+  # ──────────────────────────────────────────────
+  # Step 4: REGISTER
+  # Apply the approved change set via spec_link. Inline: the orchestrator calls
+  # the engine spec tools directly — the registry is engine-owned and NEVER
+  # hand-edited.
+  # ──────────────────────────────────────────────
+  - name: register
+    # Applies approved changes via spec_link engine calls — the registry IS the
+    # artifact; deliberately no file output.
+    acknowledge_warnings: [no-outputs]
+    spec_check: false
+    subagent: false
+    goal: >
+      Apply the approved registry changes via the engine's spec_link tool. You
+      are the orchestrator — call spec_link directly; NEVER hand-edit
+      _registry.json or _index.json (the engine owns them).
+
+      **Authority:** data/{run_id}-registry-changes.json is authoritative. If it
+      is missing, STOP and report an error.
+
+      **Step-by-step:**
+
+      1. Read data/{run_id}-registry-changes.json.
+
+      2. For each entry in additions[], call
+         spec_link(op:add, spec_id, scope, file, role). The scope is the entry's
+         `scope`. A mapping that already exists with the same role is a no-op
+         (spec_link reports it) — that is fine.
+
+      3. For each entry in removals[], call
+         spec_link(op:remove, spec_id, scope, file, reason) with the entry's
+         reason.
+
+      4. Handle results honestly: if a spec_link call fails (spec not found,
+         file missing, etc.), record it and continue with the rest; do NOT
+         fabricate success. Never retry by hand-editing the registry.
+
+      5. Write a SUMMARY to the chat:
+         - Mappings added: N (list spec_id → file [role])
+         - Stale entries removed: N (list)
+         - Failures: N (list with the error)
+         - ADVISORY (not applied): scope_findings count + redesign_proposals
+           count — remind the user these are separate, human-driven follow-ups.
+
+      Do NOT commit to git.
+    inputs:
+      - path: "data/{run_id}-registry-changes.json"
+        inject: file

@@ -1,0 +1,15 @@
+name: research-note
+description: One pass's research note (current-state, overwritten each pass).
+version: 1
+type: object
+required:
+  - topic_id
+  - title
+  - finding
+properties:
+  topic_id:
+    type: integer
+  title:
+    type: string
+  finding:
+    type: string

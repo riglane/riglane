@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "$id": "riglane-spec-index-v1",
+  "title": "Riglane Spec Index (_index.json)",
+  "description": "Per-scope engine-owned catalog at .riglane/specs/<scope>/_index.json. Engine-DERIVED from spec frontmatter at spec_write (à la agent-notes) — never hand-written by the agent. Answers 'what specs/domains do we have' (catalog + search hints). Design: sub_tasks/spec-system-revision/design/index-registry.md §1.",
+
+  "type": "object",
+  "required": ["version", "scope", "domains", "specs"],
+  "additionalProperties": false,
+
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Schema version. Starts at 1 — a clean-v1 engine-owned schema, NOT a continuation of the legacy sequence. Old files differ by shape (domains group, mappings object), not version."
+    },
+    "scope": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "The scope this index belongs to (e.g. generic, or a declared scope). Equals the directory it lives in."
+    },
+    "domains": {
+      "type": "array",
+      "description": "Domain registry for this scope. name is the spec_id prefix; description powers connotation + domain dedup.",
+      "items": { "$ref": "#/definitions/domainEntry" }
+    },
+    "specs": {
+      "type": "array",
+      "description": "One entry per committed spec in this scope. Derived from spec frontmatter by the engine.",
+      "items": { "$ref": "#/definitions/specIndexEntry" }
+    }
+  },
+
+  "definitions": {
+    "domainEntry": {
+      "type": "object",
+      "required": ["name", "description", "next_serial"],
+      "additionalProperties": false,
+      "description": "A domain within this scope. name is the full short domain word (spec_id prefix); description is a one-liner used for connotation + domain dedup; next_serial is the high-water minting counter.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+          "description": "Full short domain word, e.g. auth. lowercase, prefer one word, max ~2 hyphenated."
+        },
+        "description": {
+          "type": "string",
+          "description": "One-line description of the domain (from domain_description on the introducing spec)."
+        },
+        "next_serial": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "High-water serial counter (index-registry §1.1a). Next spec in this domain mints <domain>-<next_serial>, then next_serial++. delete does NOT decrement it — a retired id is never reused (identity stability). Safety-guard: reconciled up to highest_existing+1 if desynced."
+        }
+      }
+    },
+    "specIndexEntry": {
+      "type": "object",
+      "required": [
+        "spec_id",
+        "domain",
+        "title",
+        "summary",
+        "applies_to",
+        "path",
+        "created_at",
+        "updated_at",
+        "content_fingerprint"
+      ],
+      "additionalProperties": false,
+      "description": "Catalog entry for one spec. spec_id/domain/title/summary/applies_to are copied from the spec frontmatter by the engine; path/dates/content_fingerprint are engine-owned.",
+      "properties": {
+        "spec_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*-\\d{3}$",
+          "description": "Engine-minted <domain>-<NNN>. Full identity = (scope, domain, spec_id)."
+        },
+        "domain": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+        },
+        "title": { "type": "string" },
+        "summary": {
+          "type": "string",
+          "description": "Mandatory hint — copied verbatim from spec frontmatter. Discriminator in spec_search results + scannability on full-index read."
+        },
+        "applies_to": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Authorial intent-of-scope (areas/components/patterns). Powers area-search + dedup topology."
+        },
+        "path": {
+          "type": "string",
+          "description": "Spec file path relative to project root, e.g. .riglane/specs/generic/auth/auth-001.md."
+        },
+        "created_at": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "description": "Engine-set (once)."
+        },
+        "updated_at": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "description": "Engine-set on every spec_write."
+        },
+        "content_fingerprint": {
+          "type": "string",
+          "description": "Engine-derived fingerprint of the spec's managed content (Rule Statement), for the summary staleness guard (index-registry §1.4). Exact covered range confirmed at Phase II. Form: sha256:<hex>."
+        }
+      }
+    }
+  }
+}

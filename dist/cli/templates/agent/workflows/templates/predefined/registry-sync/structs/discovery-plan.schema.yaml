@@ -1,0 +1,77 @@
+name: discovery-plan
+description: >
+  Output of the DISCOVER step — the resolved sync set: which specs to reconcile
+  (enumerated from each scope's _index.json, active + generic), their CURRENT
+  registry mappings (from _registry.json), and per-domain grouping. Read-only
+  planning; no code is scanned yet. The SCAN fan-out keys on
+  domains[status=pending].
+format: json
+
+json_schema:
+  required_fields:
+    - field: workflow
+      type: string
+    - field: discovered_at
+      type: string
+    - field: target_scope
+      type: string
+    - field: scopes_synced
+      type: array
+      description: >
+        Scope ids whose specs are reconciled — typically [<target_scope>,
+        "generic"], or every declared scope when target_scope == "all".
+    - field: filters
+      type: object
+      description: >
+        Applied scoping (domain / spec_id); an empty object means reconcile
+        every spec in the scope set.
+    - field: summary
+      type: object
+    - field: summary.total_specs
+      type: number
+    - field: summary.total_domains
+      type: number
+    - field: summary.total_current_mappings
+      type: number
+      description: Count of file→spec mappings already in the registries.
+    - field: domains
+      type: array
+    - field: domains[].name
+      type: string
+    - field: domains[].status
+      type: string
+      enum: [pending, completed, skipped]
+      description: >
+        MUST be "pending" when DISCOVER writes the plan; the SCAN fan-out keys
+        on domains[status=pending].
+    - field: domains[].specs
+      type: array
+    - field: domains[].specs[].spec_id
+      type: string
+    - field: domains[].specs[].source_scope
+      type: string
+      description: Which scope the spec came from (lets SCAN read the right dir).
+    - field: domains[].specs[].title
+      type: string
+    - field: domains[].specs[].spec_file
+      type: string
+    - field: domains[].specs[].applies_to
+      type: array
+      description: Authorial-intent areas from the spec frontmatter (search seed).
+    - field: domains[].specs[].registered_files
+      type: array
+      description: >
+        The spec's CURRENT implemented_by entries from _registry.json — each
+        {file, role}. Empty when the spec has no mapping yet.
+    - field: scope_hints
+      type: object
+      description: >
+        Map of scope id → coverage hint (from _scope-config.json), for every
+        scope in scopes_synced that has one. Empty object when none are
+        recorded. SCAN uses these to judge cross-scope placement.
+    - field: warnings
+      type: array
+
+file_checks:
+  exists: true
+  min_size: 100

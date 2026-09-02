@@ -1,0 +1,142 @@
+name: analysis-report
+description: >
+  Output of the ANALYZE step — deep document analysis with discovered
+  requirements grouped into domains, a batch-global temp_key per requirement,
+  intra-run and existing-spec cross-references, dedup findings against
+  existing specs, and advisory domain/spec redesign proposals. Reviewed and
+  approved by the user via the human gate before extraction begins.
+format: json
+
+json_schema:
+  required_fields:
+    - field: workflow
+      type: string
+    - field: source_document
+      type: string
+    - field: analyzed_at
+      type: string
+    - field: target_scope
+      type: string
+      description: >
+        Scope id (e.g. "generic", or a declared scope) where extracted specs
+        will be written. Resolved from --scope or the active scope. Surfaced in the
+        human gate so the user can reject if wrong.
+    - field: scope_source
+      type: string
+      description: >
+        Where target_scope came from: "cli param",
+        "active scope (user override)", "active scope (project default)",
+        or "fallback (generic)".
+    - field: target_directory
+      type: string
+      description: 'Project-root-relative ".riglane/specs/<target_scope>/".'
+    - field: understanding_summary
+      type: string
+    - field: domains
+      type: array
+      min_items: 1
+    - field: domains[].name
+      type: string
+    - field: domains[].description
+      type: string
+    - field: domains[].status
+      type: string
+      enum: [pending, completed]
+      description: >
+        MUST be "pending" when ANALYZE writes the report (it means "pending
+        extraction"). EXTRACT flips a domain to "completed" after processing;
+        the parallel fan-out keys on domains[status=pending].
+    - field: domains[].requirements
+      type: array
+      min_items: 1
+    - field: domains[].requirements[].temp_key
+      type: string
+      description: >
+        Stable, batch-GLOBALLY-UNIQUE lowercase-kebab handle for this
+        requirement. Becomes the draft filename
+        (data/drafts/<domain>/<temp_key>.md) and the create_batch temp_key.
+        NOT the spec_id — the engine mints the final <domain>-NNN at commit.
+    - field: domains[].requirements[].title
+      type: string
+    - field: domains[].requirements[].source_sections
+      type: array
+    - field: domains[].requirements[].related_temp_keys
+      type: array
+      description: 'Intra-run refs — temp_keys of OTHER requirements in this run.'
+    - field: domains[].requirements[].related_existing_specs
+      type: array
+      description: >
+        Refs to already-existing specs by id (bare same-scope "<domain>-NNN" or
+        qualified "<scope>:<domain>-NNN").
+    - field: dedup_findings
+      type: array
+      description: >
+        Requirements checked against existing specs. Each entry names the
+        existing spec, a disposition ("covered_skip" = an existing spec already
+        covers it, not drafted; "near_match_distinct" = a near match judged
+        genuinely different, drafted and flagged for VALIDATE/human), and a note.
+    - field: redesign_proposals
+      type: array
+      description: >
+        Domain/spec redesign findings, produced only when the target scope (plus
+        generic) already has domains/specs AND consider_reorganize is true — empty
+        array otherwise. Kinds reducible to a move/rename (move_spec, split_domain,
+        merge_domains, rename_domain) are APPLICABLE: after the ANALYZE human gate,
+        if any are proposed the workflow routes into a reorganize branch (CURATE
+        per-move approval → APPLY via spec_write(op:move / rename_domain)). Content
+        edits (merge_specs, update_spec) stay ADVISORY — surfaced for a separate
+        manual pass, never auto-applied.
+    - field: redesign_proposals[].kind
+      type: string
+      enum:
+        - split_domain
+        - merge_domains
+        - rename_domain
+        - move_spec
+        - merge_specs
+        - update_spec
+    - field: redesign_proposals[].title
+      type: string
+      description: 'One-line summary of the proposal.'
+    - field: redesign_proposals[].affected
+      type: array
+      description: 'Affected domain names and/or existing spec ids.'
+    - field: redesign_proposals[].rationale
+      type: string
+      description: >
+        Why the current layout no longer fits — grounded in the actual specs
+        (cite spec ids / domains), not generic advice.
+    - field: redesign_proposals[].suggested_action
+      type: string
+      description: 'Concrete restructuring step the user could take.'
+    - field: execution_plan
+      type: object
+      description: >
+        Roadmap the downstream steps read to know what applies this run. Derived
+        from (and MUST agree with) domains + redesign_proposals — the engine
+        routes the create pipeline on will_extract and the reorganize branch on
+        will_reorganize.
+    - field: execution_plan.will_extract
+      type: boolean
+      description: >
+        True iff ≥1 domain has requirements to draft (status "pending" + non-empty
+        requirements). Exactly the set EXTRACT keys on, so route ⇔ ≥1 branch.
+    - field: execution_plan.draftable_count
+      type: number
+      description: 'Number of pending domains with requirements.'
+    - field: execution_plan.will_reorganize
+      type: boolean
+      description: >
+        True iff redesign_proposals has ≥1 APPLICABLE kind (move_spec /
+        split_domain / merge_domains / rename_domain).
+    - field: execution_plan.applicable_moves_count
+      type: number
+      description: 'Number of applicable (move/rename-reducible) redesign proposals.'
+    - field: discrepancies
+      type: array
+    - field: ambiguities
+      type: array
+
+file_checks:
+  exists: true
+  min_size: 200

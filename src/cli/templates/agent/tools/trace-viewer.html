@@ -1,0 +1,3599 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Workflow Trace Viewer</title>
+<style>
+  :root {
+    --bg: #f4f6f9;
+    --bg-card: #ffffff;
+    --bg-hover: #eef0f5;
+    --bg-section: #f8f9fb;
+    --text: #1c1f2e;
+    --text-secondary: #6b7280;
+    --text-muted: #9ca3af;
+    --border: #c2c9d6;
+    --border-light: #b8bfce;
+    --accent: #4a6fe8;
+    --accent-light: #eaeffb;
+    --green:    #2f9e5a;   --green-bg:   #edf7f2;
+    --red:      #d94747;   --red-bg:     #fdeaea;
+    --amber:    #b87316;   --amber-bg:   #fef5e4;
+    --blue:     #3878c2;   --blue-bg:    #e8f0fb;
+    --purple:   #7048c8;   --purple-bg:  #f0ebff;
+    --teal:     #0e8a8a;   --teal-bg:    #e4f5f5;
+    --rose:     #c2367e;   --rose-bg:    #fdeaf4;
+    /* Lanes — a TRUE orange in the narrow hue gap between the delegation
+       amber (~34) and red; same values as the workflow editor. */
+    --orange:   #e05a1c;   --orange-bg:  #fdeee6;
+    /* ONE COLOUR PER MECHANISM, shared with the workflow editor: whatever a
+       mechanism looks like in the graph, it looks like here. These three names
+       are the contract — never hardcode a hex for repetition/branching/
+       delegation again (the two views had drifted into SWAPPED colours: the
+       graph drew loops rose and routes teal, the trace drew loops teal and
+       routes violet). */
+    --mech-loop:       var(--rose);
+    --mech-loop-bg:    var(--rose-bg);
+    --mech-route:      var(--teal);
+    --mech-route-bg:   var(--teal-bg);
+    --mech-delegation: var(--amber);
+    --mech-delegation-bg: var(--amber-bg);
+    --mech-lanes:      var(--orange);
+    --mech-lanes-bg:   var(--orange-bg);
+    --shadow: 0 1px 4px rgba(0,0,0,0.06), 0 0 0 1px rgba(0,0,0,0.04);
+    --shadow-lg: 0 4px 16px rgba(0,0,0,0.08);
+    --radius: 12px;
+    --radius-sm: 7px;
+    --radius-xs: 4px;
+    --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --mono: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+  }
+  [data-theme="dark"] {
+    --bg: #0d1117;
+    --bg-card: #161b22;
+    --bg-hover: #1e242c;
+    --bg-section: #1a2030;
+    --text: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #6a7585;
+    --border: #2d343d;
+    --border-light: #252c36;
+    --accent: #7090f4;
+    --accent-light: #131e40;
+    --green:    #52c880;   --green-bg:   #0d2618;
+    --red:      #e87070;   --red-bg:     #2d1010;
+    --amber:    #d4963a;   --amber-bg:   #261a00;
+    --blue:     #6aa8e8;   --blue-bg:    #0c1f36;
+    --purple:   #a882e8;   --purple-bg:  #1a1030;
+    --teal:     #4bc6c6;   --teal-bg:    #06282c;
+    --rose:     #ee7ab4;   --rose-bg:    #2d0f21;
+    --orange:   #f5884a;   --orange-bg:  #2e1408;
+    --shadow: 0 1px 4px rgba(0,0,0,0.25), 0 0 0 1px rgba(0,0,0,0.2);
+    --shadow-lg: 0 4px 16px rgba(0,0,0,0.35);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  /* Scrollbars are chrome, not content: thin, quiet, and only as visible as
+     they need to be to say the area scrolls. Both themes redefine --border and
+     --text-muted, so this follows the theme without restating any colour. */
+  * { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 8px;
+    border: 2px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); background-clip: content-box; }
+  ::-webkit-scrollbar-corner { background: transparent; }
+  body {
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+
+  /* ── Header ─────────────────────────────────────────── */
+  .header {
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: var(--shadow);
+  }
+  .header-logo { font-size: 15px; font-weight: 700; color: var(--accent); letter-spacing: -0.3px; }
+  .header-logo span { opacity: 0.45; font-weight: 400; margin-left: 2px; }
+  .header-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  .btn {
+    padding: 6px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-card);
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s;
+    font-family: var(--font);
+  }
+  .btn:hover { background: var(--bg-hover); }
+  .btn-primary { background: var(--accent); color: #fff; border-color: transparent; }
+  .btn-primary:hover { opacity: 0.88; background: var(--accent); }
+
+  /* ── Drop zone ─────────────────────────────────────── */
+  .drop-zone {
+    max-width: 640px;
+    margin: 80px auto;
+    padding: 60px 40px;
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    text-align: center;
+    transition: all 0.2s;
+    background: var(--bg-card);
+    box-shadow: var(--shadow);
+  }
+  .drop-zone.dragover { border-color: var(--accent); background: var(--accent-light); }
+  .drop-zone h2 { font-size: 18px; margin-bottom: 8px; font-weight: 600; }
+  .drop-zone p { color: var(--text-secondary); font-size: 13px; margin-bottom: 20px; }
+  .drop-zone input[type="file"] { display: none; }
+
+  /* ── Main ──────────────────────────────────────────── */
+  .main { max-width: 1100px; margin: 0 auto; padding: 24px; }
+
+  /* ── Workflow card ─────────────────────────────────── */
+  .wf-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 20px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .wf-header {
+    padding: 20px 24px 16px;
+    border-bottom: 1px solid var(--border-light);
+  }
+  .wf-title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .wf-name { font-size: 20px; font-weight: 700; letter-spacing: -0.3px; }
+  .wf-version {
+    font-size: 11px;
+    color: var(--text-secondary);
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    padding: 2px 8px;
+    border-radius: 20px;
+    font-weight: 500;
+  }
+  .wf-meta { margin-top: 7px; font-size: 12px; color: var(--text-secondary); display: flex; gap: 18px; flex-wrap: wrap; }
+  .wf-meta strong { color: var(--text); font-weight: 600; }
+
+  /* Card sections */
+  .wf-section {
+    padding: 14px 24px;
+    border-bottom: 1px solid var(--border-light);
+  }
+  .wf-section:last-child { border-bottom: none; }
+  .wf-section-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    font-weight: 700;
+    color: var(--text-muted);
+    margin-bottom: 9px;
+  }
+
+  /* Description */
+  .wf-description {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.65;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  /* ── Param table ───────────────────────────────────── */
+  .param-table { display: flex; flex-direction: column; }
+  .param-row {
+    display: flex;
+    gap: 0;
+    align-items: flex-start;
+  }
+  .param-row + .param-row { border-top: 1px solid var(--border-light); }
+  .param-name {
+    width: 140px;
+    min-width: 100px;
+    flex-shrink: 0;
+    padding: 9px 16px 9px 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    font-family: var(--mono);
+    line-height: 1.4;
+  }
+  .param-value-cell { flex: 1; padding: 9px 0; min-width: 0; }
+  .param-value {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    line-height: 1.4;
+    word-break: break-word;
+  }
+  .param-value.unset { color: var(--text-muted); font-style: italic; font-weight: 400; }
+  .param-desc { font-size: 11px; color: var(--text-muted); margin-top: 3px; line-height: 1.5; }
+
+  /* ── Gate chips ────────────────────────────────────── */
+  .wf-bottom-row {
+    display: flex;
+    gap: 32px;
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+  .wf-bottom-col { flex: 0 0 auto; }
+  .wf-bottom-col-right { flex: 0 0 auto; margin-left: auto; }
+
+  .gate-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 7px; }
+  .gate-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 11px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 500;
+    border: 1px solid transparent;
+  }
+  .gate-chip-on  { background: var(--green-bg); color: var(--green); }
+  .gate-chip-off { background: var(--bg-hover); color: var(--text-muted); border-color: var(--border-light); }
+  .gate-chip-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .gate-chip-on  .gate-chip-dot { background: var(--green); }
+  .gate-chip-off .gate-chip-dot { background: var(--text-muted); }
+  .gate-retries { font-size: 11px; color: var(--text-muted); }
+
+  /* ── Tooltips ── */
+  [data-tip] {
+    cursor: pointer;
+  }
+  .tip-hint {
+    position: fixed;
+    pointer-events: none;
+    z-index: 9998;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    color: var(--bg-card);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 16px;
+    text-align: center;
+    font-family: var(--sans);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+    transition: opacity 0.1s;
+  }
+  .tip-popup {
+    position: fixed;
+    white-space: pre-line;
+    background: var(--text);
+    color: var(--bg);
+    font-size: 11px;
+    font-weight: 400;
+    line-height: 1.5;
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    white-space: normal;
+    max-width: 340px;
+    z-index: 9999;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+    pointer-events: none;
+    animation: tipFadeIn 0.12s ease-out;
+  }
+  @keyframes tipFadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* Context */
+  .context-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .context-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    padding: 4px 11px;
+    background: var(--blue-bg);
+    color: var(--blue);
+    border-radius: 20px;
+    font-weight: 500;
+  }
+  .context-chip-key { opacity: 0.75; }
+  .context-chip-val { font-family: var(--mono); font-size: 11px; font-weight: 700; }
+
+  /* ── Stats ─────────────────────────────────────────── */
+  .stats { display: flex; gap: 20px; flex-wrap: wrap; align-items: center; }
+  .stat { display: flex; flex-direction: column; align-items: center; gap: 1px; }
+  .stat-val { font-weight: 700; font-size: 20px; line-height: 1; }
+  .stat-label { font-size: 11px; color: var(--text-muted); }
+
+  /* ── Status pill ───────────────────────────────────── */
+  .pill {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .pill-completed     { background: var(--green-bg);  color: var(--green);  }
+  .pill-failed        { background: var(--red-bg);    color: var(--red);    }
+  .pill-in_progress,
+  .pill-in-progress   { background: var(--blue-bg);   color: var(--blue);   }
+  .pill-paused        { background: var(--amber-bg);  color: var(--amber);  }
+  .pill-pending       { background: var(--bg-hover);  color: var(--text-secondary); }
+  /* Live wheel next to IN PROGRESS — shown only while the run's engine process
+     is actually ALIVE (state 'running' from /api/runs.json), so an in_progress
+     label over a dead run never spins. currentColor keeps the pill's hue. */
+  .live-spin {
+    display: inline-block; width: 9px; height: 9px; margin-left: 6px;
+    border: 1.5px solid currentColor; border-top-color: transparent;
+    border-radius: 50%; vertical-align: -1px;
+    animation: live-spin-rot 0.9s linear infinite;
+  }
+  @keyframes live-spin-rot { to { transform: rotate(360deg); } }
+
+  /* ── Orchestration panel ──────────────────────────── */
+  .orch-panel { margin-bottom: 20px; }
+  .orch-header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 14px 20px; cursor: pointer; user-select: none;
+  }
+  .orch-header:hover { background: var(--bg-hover); border-radius: var(--radius); }
+  .orch-header .step-chevron {
+    font-size: 10px; color: var(--text-muted);
+    transition: transform 0.2s;
+  }
+  .orch-panel.open .orch-header .step-chevron { transform: rotate(90deg); }
+  .orch-title { font-size: 14px; font-weight: 600; }
+  .orch-meta { font-size: 12px; color: var(--text-secondary); margin-left: auto; }
+  .orch-body {
+    display: none; padding: 4px 20px 16px;
+    border-top: 1px solid var(--border-light);
+  }
+  .orch-panel.open .orch-body { display: block; }
+  .orch-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 0; font-size: 13px;
+    border-bottom: 1px solid var(--border-light);
+  }
+  .orch-row:last-child { border-bottom: none; }
+  .orch-row-fail { background: var(--red-bg); border-radius: var(--radius-xs); padding: 5px 6px; }
+  .orch-time { font-family: var(--mono); font-size: 11px; color: var(--text-muted); min-width: 70px; }
+  .orch-dot {
+    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  }
+  .orch-dot-blue   { background: var(--blue); }
+  .orch-dot-purple { background: var(--purple); }
+  .orch-dot-green  { background: var(--green); }
+  .orch-dot-amber  { background: var(--amber); }
+  .orch-dot-gray   { background: var(--text-muted); }
+  .orch-dot-fail   { background: var(--red); }
+  .orch-tool { font-family: var(--mono); font-size: 12px; font-weight: 600; min-width: 140px; }
+  .orch-step { font-size: 12px; color: var(--accent); }
+  .orch-dur { font-size: 11px; color: var(--text-muted); font-family: var(--mono); min-width: 45px; text-align: right; }
+  .orch-summary { font-size: 12px; color: var(--text-secondary); }
+  .orch-error { font-size: 12px; color: var(--red); }
+
+  /* ── Timeline ──────────────────────────────────────── */
+  .timeline {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    margin-bottom: 20px;
+    box-shadow: var(--shadow);
+  }
+  .timeline-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-muted); font-weight: 700; margin-bottom: 10px; }
+  .timeline-bar { display: flex; height: 32px; border-radius: var(--radius-sm); overflow: hidden; gap: 3px; }
+  .timeline-seg {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 600;
+    color: rgba(255,255,255,0.93);
+    cursor: pointer;
+    transition: opacity 0.15s;
+    min-width: 24px;
+    padding: 0 8px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border-radius: var(--radius-xs);
+  }
+  .timeline-seg:hover { opacity: 0.8; }
+  .timeline-seg.completed   { background: var(--green); }
+  .timeline-seg.failed      { background: var(--red); }
+  .timeline-seg.in_progress,
+  .timeline-seg.in-progress { background: var(--blue); }
+  .timeline-seg.paused      { background: var(--amber); }
+  .timeline-seg.pending     { background: var(--border); color: var(--text-secondary); }
+  .timeline-durations { display: flex; gap: 3px; margin-top: 4px; }
+  .timeline-dur {
+    text-align: center;
+    font-size: 10px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ── Step cards ────────────────────────────────────── */
+  .step-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 10px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  /* Phase 61: planning step visual distinction. Mirrors workflow-editor.html
+     `.step-card-planning` styling so the user gets the same color cue across
+     authoring + execution viewing. */
+  .step-card.step-card-planning {
+    background: var(--purple-bg);
+    border-color: var(--purple);
+  }
+  .step-card.step-card-planning .step-header:hover { background: var(--purple-bg); filter: brightness(0.96); }
+  /* Phase B: loop phase divider — horizontal rule with a pill label, the
+     engine-flow-visualizer "STEP LOOP" idiom. Teal: distinct from planning
+     (blue/purple) and delegation (amber). */
+  .loop-divider { display: flex; align-items: center; gap: 10px; margin: 14px 0 10px; }
+  .loop-divider::before { content: ''; width: 16px; border-top: 2px dashed var(--mech-loop); opacity: 0.6; }
+  .loop-divider::after { content: ''; flex: 1; border-top: 2px dashed var(--mech-loop); opacity: 0.6; }
+  .loop-divider-label { padding: 3px 12px; border: 1.5px solid var(--mech-loop); color: var(--mech-loop); background: var(--mech-loop-bg); border-radius: 12px; font-family: var(--mono); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap; }
+  .loop-divider.loop-divider-exit::before, .loop-divider.loop-divider-exit::after { border-top-style: solid; }
+  /* Phase R: route transition divider — same shape as the loop divider, in the
+     ROUTE mechanism colour (the graph's branch chips use the same one). Marks
+     where execution moved between the main flow and a conditional route (or
+     between nested routes). */
+  .route-divider { display: flex; align-items: center; gap: 10px; margin: 14px 0 10px; }
+  .route-divider::before { content: ''; width: 16px; border-top: 2px dashed var(--mech-route); opacity: 0.6; }
+  .route-divider::after { content: ''; flex: 1; border-top: 2px dashed var(--mech-route); opacity: 0.6; }
+  .route-divider-label { padding: 3px 12px; border: 1.5px solid var(--mech-route); color: var(--mech-route); background: var(--mech-route-bg); border-radius: 12px; font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.04em; white-space: nowrap; cursor: help; }
+
+  /* Lanes: the fork/join dividers and the side-by-side lane containers. */
+  .lanes-divider { display: flex; align-items: center; gap: 10px; margin: 14px 0 8px; }
+  .lanes-divider::before { content: ''; width: 28px; border-top: 2px dashed var(--mech-lanes); }
+  .lanes-divider::after { content: ''; flex: 1; border-top: 2px dashed var(--mech-lanes); }
+  .lanes-divider.lanes-divider-join::before,
+  .lanes-divider.lanes-divider-join::after { border-top-style: solid; }
+  .lanes-divider-label { padding: 3px 12px; border: 1.5px solid var(--mech-lanes); color: var(--mech-lanes); background: var(--mech-lanes-bg); border-radius: 12px; font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.04em; white-space: nowrap; cursor: help; }
+  /* Lane groups stack VERTICALLY, one full-width group per row: side-by-side
+     columns squeezed every card (unreadable at 3+ lanes) and fought the
+     expandable card layout. Concurrency is conveyed by the lane stamps and
+     timestamps, not by horizontal placement. */
+  .lanes-row { display: flex; flex-direction: column; gap: 10px; margin: 6px 0; }
+  .lane-group { border-left: 3px solid var(--mech-lanes); border-radius: 6px; padding: 6px 8px; background: color-mix(in srgb, var(--mech-lanes-bg) 40%, var(--bg)); }
+  .lane-group-header { display: flex; align-items: center; gap: 8px; font: 700 10.5px var(--mono); letter-spacing: 0.05em; text-transform: uppercase; color: var(--mech-lanes); padding: 2px 2px 6px; }
+
+
+  /* F7: delegation block divider — same shape as loop/route dividers, amber
+     to match the delegation card family. Marks where execution enters the
+     delegated child workflow's steps (embedded block) and returns. */
+  .delegation-divider { display: flex; align-items: center; gap: 10px; margin: 14px 0 10px; }
+  .delegation-divider::before { content: ''; width: 16px; border-top: 2px dashed var(--amber); opacity: 0.6; }
+  .delegation-divider::after { content: ''; flex: 1; border-top: 2px dashed var(--amber); opacity: 0.6; }
+  .delegation-divider-label { padding: 3px 12px; border: 1.5px solid var(--mech-delegation); color: var(--mech-delegation); background: var(--mech-delegation-bg); border-radius: 12px; font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.04em; white-space: nowrap; cursor: help; }
+  .delegation-divider.delegation-divider-exit::before, .delegation-divider.delegation-divider-exit::after { border-top-style: solid; }
+
+  /* Delegation step visual distinction (amber). Mirrors planning pattern. */
+  .step-card.step-card-delegation {
+    background: var(--amber-bg);
+    border-color: var(--amber);
+  }
+  .step-card.step-card-delegation .step-header:hover { background: var(--amber-bg); filter: brightness(0.96); }
+  .delegate-pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-family: var(--mono); background: var(--amber-bg); color: var(--amber); }
+  .delegation-panel { padding: 14px 20px 14px 56px; border-bottom: 1px solid var(--border-light); }
+  .delegation-header { display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 10px; }
+  /* Child workflow group — indented steps below planning/delegation parent */
+  .child-workflow-group {
+    margin: 4px 0 12px 40px;
+    padding: 12px 16px 8px;
+    border-left: 3px solid var(--purple);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    background: color-mix(in srgb, var(--purple-bg) 40%, var(--bg));
+  }
+  .child-workflow-group.child-workflow-group-delegation {
+    border-left-color: var(--amber);
+    background: color-mix(in srgb, var(--amber-bg) 40%, var(--bg));
+  }
+  .child-workflow-group-header {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 11px; color: var(--text-secondary);
+    text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;
+    margin-bottom: 10px; padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-light);
+  }
+  .child-workflow-group-header .pill { font-size: 9px; }
+  .child-workflow-group .step-card { margin-bottom: 8px; }
+  /* Auto-refresh toast notification */
+  .toast { position: fixed; bottom: 20px; right: 20px; padding: 8px 16px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 600; color: #fff; z-index: 9999; pointer-events: none; animation: toastFade 2.5s ease forwards; }
+  .toast-updated { background: var(--green); }
+  .toast-info { background: var(--blue); }
+  @keyframes toastFade { 0% { opacity: 0; transform: translateY(10px); } 10% { opacity: 1; transform: translateY(0); } 80% { opacity: 1; } 100% { opacity: 0; } }
+  /* Auto-refresh button active state */
+  .btn-auto-refresh-on { background: var(--green-bg); border-color: var(--green); color: var(--green); }
+  .btn-auto-refresh-on::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--green); margin-right: 6px; animation: pulse 1.5s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  /* Planning panel inside step details. */
+  .planning-panel { padding: 14px 20px 14px 56px; border-bottom: 1px solid var(--border-light); }
+  .planning-header { display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 10px; }
+  .planning-phase-pill { padding: 2px 8px; border-radius: 10px; font-size: 10px; font-family: var(--mono); text-transform: none; letter-spacing: 0; }
+  .planning-phase-pill.planning,
+  .planning-phase-pill.validating { background: var(--blue-bg); color: var(--blue); }
+  .planning-phase-pill.executing { background: var(--amber-bg); color: var(--amber); }
+  .planning-phase-pill.completed { background: var(--green-bg); color: var(--green); }
+  .planning-phase-pill.failed { background: var(--red-bg); color: var(--red); }
+  .planning-attempts { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+  .planning-attempt { display: flex; gap: 10px; padding: 6px 10px; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 4px; font-size: 12px; align-items: flex-start; }
+  .planning-attempt-num { font-weight: 600; font-family: var(--mono); color: var(--text-secondary); flex-shrink: 0; min-width: 28px; }
+  .planning-attempt-ts { font-size: 10px; color: var(--text-muted); font-family: var(--mono); flex-shrink: 0; min-width: 90px; }
+  .planning-attempt-ok { color: var(--green); flex-shrink: 0; }
+  .planning-attempt-fail { color: var(--red); flex-shrink: 0; }
+  .planning-attempt-summary { flex: 1; word-break: break-word; line-height: 1.5; }
+
+  /* Phase 61 Slice U4 — child trace inline rendering. The child block sits
+     under the planning step's panel; its inner steps reuse the standard
+     .step-card markup, but the wrapper indents + adds a left border so the
+     parent/child relationship is visually obvious. */
+  .child-trace-block {
+    margin-top: 12px;
+    padding: 10px 0 0 16px;
+    border-left: 3px solid var(--blue);
+  }
+  .child-trace-block-header {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 11px; color: var(--text-secondary);
+    text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .child-trace-block-header .pill { text-transform: none; letter-spacing: 0; }
+  .child-trace-load-btn {
+    padding: 6px 12px; font-size: 12px; font-family: var(--mono);
+    background: var(--bg-card); color: var(--blue);
+    border: 1px solid var(--blue); border-radius: 4px; cursor: pointer;
+    transition: background 0.15s;
+  }
+  .child-trace-load-btn:hover { background: var(--blue-bg); }
+  .child-trace-error {
+    margin-top: 8px; padding: 8px 12px; font-size: 12px;
+    color: var(--red); background: var(--red-bg);
+    border: 1px solid var(--red); border-radius: 4px;
+  }
+  .child-trace-fallback {
+    margin-top: 8px; padding: 8px 12px; font-size: 12px;
+    color: var(--text-secondary); background: var(--bg-card);
+    border: 1px dashed var(--border); border-radius: 4px;
+  }
+  .child-trace-fallback input[type=file] { font-size: 11px; margin-top: 4px; }
+  .child-trace-loading {
+    font-size: 12px; color: var(--text-muted); font-style: italic; padding: 6px 0;
+  }
+  .step-header {
+    padding: 13px 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    transition: background 0.12s;
+    user-select: none;
+  }
+  .step-header:hover { background: var(--bg-hover); }
+  .step-chevron { width: 16px; height: 16px; transition: transform 0.2s; color: var(--text-muted); flex-shrink: 0; }
+  .step-card.open .step-chevron { transform: rotate(90deg); }
+  .step-index {
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700;
+    flex-shrink: 0;
+  }
+  .step-index.completed   { background: var(--green-bg);  color: var(--green);  }
+  .step-index.failed      { background: var(--red-bg);    color: var(--red);    }
+  .step-index.in_progress,
+  .step-index.in-progress { background: var(--blue-bg);   color: var(--blue);   }
+  .step-index.pending     { background: var(--bg-hover);  color: var(--text-secondary); }
+  /* Pending step card: faded appearance */
+  .step-card-pending { opacity: 0.45; }
+  .step-card-pending .step-header:hover { opacity: 0.7; }
+
+  /* ── Run-inbox dialog (human gate waiting for an answer) ── */
+  .step-card-inbox-waiting { border-color: var(--amber); box-shadow: 0 0 0 1px var(--amber-bg); }
+  .inbox-await-pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 700; background: var(--amber-bg); color: var(--amber); animation: inboxPulse 2s ease-in-out infinite; }
+  @keyframes inboxPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+  .inbox-dlg { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; background: var(--bg-section); }
+  .inbox-dlg.waiting { border-color: var(--amber); background: var(--amber-bg); }
+  .inbox-dlg-kind { font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--purple); }
+  .inbox-dlg-title { font-size: 14px; font-weight: 700; color: var(--text); margin: 4px 0 2px; }
+  .inbox-dlg-body { font-size: 12.5px; line-height: 1.55; color: var(--text-secondary); white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 5px; }
+  .inbox-dlg-req { margin: 8px 0 0; padding: 7px 10px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 7px; font-family: var(--mono); font-size: 11.5px; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .inbox-dlg-actions { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
+  .inbox-btn { height: 28px; padding: 0 13px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg-card); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+  .inbox-btn.accept { background: var(--green-bg); border-color: var(--green); color: var(--green); }
+  .inbox-btn.reject { background: var(--red-bg); border-color: var(--red); color: var(--red); }
+  .inbox-btn.send { background: var(--purple-bg); border-color: var(--purple); color: var(--purple); }
+  /* Predefined alternatives: a vertical pick-one list in amber — distinct
+     from yes/no (green/red) and from free text / Send (purple). */
+  .inbox-choicecap { margin-top: 9px; font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--amber); }
+  .inbox-choicelist { display: flex; flex-direction: column; align-items: stretch; gap: 5px; margin-top: 5px; max-width: 440px; }
+  .inbox-choice { display: flex; align-items: center; gap: 9px; text-align: left; padding: 7px 11px; border-radius: 8px; border: 1px solid var(--amber); background: var(--bg-card); font: inherit; font-size: 12px; color: var(--text); cursor: pointer; transition: background .12s ease; }
+  .inbox-choice::before { content: ''; width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--amber); background: transparent; flex: 0 0 auto; }
+  .inbox-choice:hover { background: var(--amber-bg); }
+  .inbox-choice.sel { background: var(--amber-bg); font-weight: 700; box-shadow: inset 0 0 0 1px var(--amber); }
+  .inbox-choice.sel::before { background: var(--amber); box-shadow: inset 0 0 0 2.5px var(--bg-card); }
+  /* The agent's suggestion (request.recommended): a badge, never a preselect —
+     the same tag the terminal entry carries, so every channel shows it. */
+  .inbox-choice .rec { margin-left: auto; flex: 0 0 auto; font-size: 9.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--amber); border: 1px solid var(--amber); border-radius: 999px; padding: 1px 7px; }
+  /* Stale-page banner: the served tool changed under a long-open viewer. */
+  .stale-banner { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 9999; display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--amber); background: var(--amber-bg); color: var(--text); font-size: 12.5px; box-shadow: 0 6px 24px rgba(0,0,0,0.25); }
+  .stale-banner button { height: 26px; padding: 0 12px; border-radius: 7px; border: 1px solid var(--amber); background: var(--amber); color: #fff; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+  .inbox-dlg-text { width: 100%; min-height: 48px; margin-top: 8px; padding: 7px 9px; border: 1px solid var(--border); border-radius: 7px; font: inherit; font-size: 12px; resize: vertical; background: var(--bg-card); color: var(--text); }
+  .inbox-dlg-answered { margin-top: 8px; font-size: 12px; color: var(--text-secondary); }
+  .inbox-dlg-anstext { color: var(--text); }
+  .inbox-item { margin-top: 9px; padding: 8px 11px; border: 1px solid var(--border); border-left: 3px solid var(--purple); border-radius: 8px; background: var(--bg-card); }
+  .inbox-item-t { font-size: 12.5px; font-weight: 700; color: var(--text); }
+  .inbox-btn.sel { outline: 2px solid currentColor; outline-offset: 1px; }
+  /* A marked verdict must be unmistakable (live: a selected Accept read as
+     unselected) — the selected button flips to a solid fill. */
+  .inbox-btn.accept.sel { background: var(--green); border-color: var(--green); color: #fff; outline: none; }
+  .inbox-btn.reject.sel { background: var(--red); border-color: var(--red); color: #fff; outline: none; }
+  .step-name  { font-weight: 600; font-size: 14px; font-family: var(--mono); }
+  .step-model { font-size: 11px; color: var(--purple); font-family: var(--mono); padding: 2px 8px; background: var(--purple-bg); border: 1px solid var(--purple); border-radius: 10px; margin-right: auto; opacity: 0.85; }
+  .step-stats { display: flex; gap: 12px; font-size: 11px; color: var(--text-secondary); align-items: center; flex-wrap: wrap; }
+  .step-stats span { white-space: nowrap; }
+
+  /* Step details */
+  .step-details { display: none; border-top: 1px solid var(--border-light); }
+  .step-card.open .step-details { display: block; }
+
+  .detail-block {
+    padding: 14px 20px 14px 56px;
+    border-bottom: 1px solid var(--border-light);
+  }
+  .detail-block:last-child { border-bottom: none; }
+  .detail-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--text-muted);
+    letter-spacing: 0.8px;
+    margin-bottom: 8px;
+  }
+
+  /* Step config chips */
+  .step-config-chips { display: flex; gap: 5px; flex-wrap: wrap; }
+  .step-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 9px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 500;
+    border: 1px solid transparent;
+  }
+  .step-chip-key { opacity: 0.75; }
+  .step-chip-on      { background: var(--green-bg);  color: var(--green);  }
+  .step-chip-off     { background: var(--bg-hover);  color: var(--text-muted);  border-color: var(--border-light); }
+  .step-chip-inherit { background: var(--purple-bg); color: var(--purple); }
+  .step-chip-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+  .step-chip-on  .step-chip-dot { background: var(--green); }
+  .step-chip-off .step-chip-dot { background: var(--text-muted); }
+
+  /* Gate results */
+  .gate-row { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 3px 0; }
+  .gate-icon { font-size: 13px; }
+  .gate-pass { color: var(--green); }
+  .gate-fail { color: var(--red); }
+  .gate-info { color: var(--text-secondary); font-size: 12px; }
+
+  /* Invocations */
+  .invocation {
+    background: var(--bg-section);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+    margin-bottom: 6px;
+    font-size: 13px;
+  }
+  .invocation-header { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .invocation-iter { font-weight: 600; font-size: 12px; }
+
+  /* Retry badges */
+  .retry-badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+  .retry-gate { background: var(--amber-bg); color: var(--amber); }
+  .branch-badge { background: var(--blue-bg); color: var(--blue); }
+
+  /* Subagent group (nested view) */
+  .subagent-group {
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    margin-bottom: 8px;
+    overflow: hidden;
+  }
+  .subagent-header {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+    padding: 10px 14px;
+    background: var(--bg-section);
+    cursor: pointer;
+    user-select: none;
+    font-size: 13px;
+  }
+  .subagent-header:hover { background: var(--bg-hover); }
+  .subagent-toggle { font-size: 10px; color: var(--text-muted); transition: transform 0.15s; }
+  .subagent-group.open .subagent-toggle { transform: rotate(90deg); }
+  .subagent-label { font-weight: 600; font-size: 12px; }
+  .subagent-body {
+    display: none;
+    padding: 0 14px 8px;
+    border-top: 1px solid var(--border-light);
+  }
+  .subagent-group.open .subagent-body { display: block; }
+  .subagent-children {
+    display: none;
+    padding: 4px 14px 8px 28px;
+    border-top: 1px solid var(--border-light);
+  }
+  .subagent-group.open .subagent-children { display: block; }
+
+  .subagent-time { font-size: 11px; color: var(--text-muted); font-family: var(--mono); }
+
+  /* ── Subagent Timeline (Gantt) ── */
+  .gantt-container {
+    margin-top: 8px;
+    padding: 12px 0 4px;
+  }
+  .gantt-axis {
+    position: relative;
+    height: 20px;
+    margin: 0 0 2px 130px;
+    border-bottom: 1px solid var(--border);
+  }
+  .gantt-tick {
+    position: absolute;
+    bottom: 0;
+    transform: translateX(-50%);
+    font-size: 9px;
+    font-family: var(--mono);
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  .gantt-tick::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 50%;
+    width: 1px;
+    height: 5px;
+    background: var(--border);
+  }
+  .gantt-row {
+    display: flex;
+    align-items: center;
+    height: 26px;
+    margin: 2px 0;
+  }
+  .gantt-label {
+    width: 130px;
+    flex-shrink: 0;
+    font-size: 11px;
+    color: var(--text-secondary);
+    text-overflow: ellipsis;
+    overflow: hidden;
+    white-space: nowrap;
+    padding-right: 8px;
+    text-align: right;
+    font-family: var(--mono);
+  }
+  .gantt-track {
+    flex: 1;
+    position: relative;
+    height: 18px;
+    background: var(--bg-section);
+    border-radius: 3px;
+  }
+  .gantt-bar {
+    position: absolute;
+    top: 2px;
+    height: 14px;
+    border-radius: 3px;
+    min-width: 3px;
+    transition: opacity 0.15s;
+  }
+  .gantt-bar:hover {
+    opacity: 0.85;
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+  .gantt-bar-pass   { background: var(--green); }
+  .gantt-bar-fail   { background: var(--red); }
+  .gantt-bar-retry  { background: var(--amber); opacity: 0.5; }
+  .gantt-bar-text {
+    position: absolute;
+    top: 0;
+    left: 6px;
+    line-height: 14px;
+    font-size: 9px;
+    font-family: var(--mono);
+    color: #fff;
+    white-space: nowrap;
+    pointer-events: none;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+  }
+  .gantt-legend {
+    display: flex;
+    gap: 14px;
+    margin: 8px 0 0 130px;
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+  .gantt-legend-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    margin-right: 3px;
+    vertical-align: middle;
+  }
+
+  .gate-retry-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 4px 0;
+    font-size: 12px;
+    color: var(--text-secondary);
+    border-bottom: 1px solid var(--border-light);
+  }
+  .gate-retry-row:last-child { border-bottom: none; }
+
+  /* ── Attempt blocks within subagent ── */
+  .attempt-block {
+    border-top: 1px solid var(--border-light);
+    padding: 10px 14px;
+    position: relative;
+  }
+  .attempt-block:first-child { border-top: none; }
+  .attempt-block-retry {
+    background: color-mix(in srgb, var(--amber) 15%, var(--bg-card));
+    border-left: 3px solid var(--amber);
+  }
+  .attempt-block-pass {
+    background: color-mix(in srgb, var(--green) 15%, var(--bg-card));
+    border-left: 3px solid var(--green);
+  }
+  .attempt-block-fail {
+    background: color-mix(in srgb, var(--red) 15%, var(--bg-card));
+    border-left: 3px solid var(--red);
+  }
+  .attempt-header {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+  .attempt-label {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+  .attempt-label-primary { background: var(--blue-bg); color: var(--blue); }
+  .attempt-label-retry { background: var(--blue-bg); color: var(--blue); }
+  .attempt-stats {
+    display: flex;
+    gap: 10px;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-weight: 400;
+  }
+
+  /* ── Gate section (separated from invocation body) ── */
+  .gate-section {
+    margin-top: 10px;
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-light);
+    background: var(--bg-section);
+  }
+  .gate-section-pass {
+    border-color: var(--green);
+    border-left-width: 3px;
+  }
+  .gate-section-fail {
+    border-color: var(--red);
+    border-left-width: 3px;
+  }
+  .gate-header-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    font-size: 12px;
+  }
+  .gate-type-label {
+    font-weight: 600;
+    font-size: 11px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+
+  /* ── Feedback arrow (gate → next retry) ── */
+  .feedback-arrow {
+    margin: 6px 0 2px;
+    padding: 6px 12px;
+    background: var(--amber-bg);
+    border: 1px dashed var(--amber);
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    color: var(--amber);
+    position: relative;
+  }
+  .feedback-arrow::before {
+    content: '↓ feedback sent to next attempt';
+    display: block;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+    opacity: 0.7;
+  }
+  .feedback-arrow-text {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 120px;
+    overflow-y: auto;
+  }
+
+  /* Invocation detail sections */
+  .inv-meta { display: flex; gap: 12px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
+  .inv-meta-item { font-size: 11px; color: var(--text-muted); }
+  .inv-meta-item strong { color: var(--text-secondary); font-weight: 600; }
+  .inv-expandable {
+    margin-top: 8px;
+    border-top: 1px solid var(--border-light);
+    padding-top: 8px;
+  }
+  .inv-expandable summary {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent);
+    cursor: pointer;
+    user-select: none;
+  }
+  .inv-expandable summary:hover { text-decoration: underline; }
+  .inv-prompt-text, .inv-summary-text {
+    margin-top: 6px;
+    padding: 8px 12px;
+    background: var(--bg);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-xs);
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 300px;
+    overflow-y: auto;
+    color: var(--text-secondary);
+  }
+  .retry-step { background: var(--blue-bg);  color: var(--blue);  }
+
+  /* Warnings banner */
+  .warnings-banner {
+    background: var(--amber-bg);
+    border: 1px solid var(--amber);
+    border-left-width: 4px;
+    border-radius: var(--radius-sm);
+    padding: 12px 16px;
+    margin: 12px 0;
+  }
+  .warnings-title {
+    font-weight: 700;
+    font-size: 13px;
+    color: var(--amber);
+    margin-bottom: 6px;
+  }
+  .warnings-list {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .warnings-list li { margin-bottom: 2px; }
+
+  /* Gate failure */
+  .gate-failure-detail {
+    margin-top: 8px;
+    background: var(--red-bg);
+    border: 1px solid var(--red);
+    border-left-width: 3px;
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+  .gate-failure-header {
+    padding: 8px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--red);
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .gate-failure-header:hover { opacity: 0.8; }
+  .gate-failure-toggle { font-size: 9px; transition: transform 0.15s; }
+  .gate-failure-detail.open .gate-failure-toggle { transform: rotate(90deg); }
+  .gate-failure-body {
+    display: none;
+    padding: 0 12px 8px;
+    font-size: 11px;
+    font-family: var(--mono);
+    color: var(--red);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  .gate-failure-detail.open .gate-failure-body { display: block; }
+
+  /* Goal text */
+  .goal-text {
+    font-size: 12px;
+    color: var(--text-secondary);
+    background: var(--bg-section);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.65;
+    max-height: 280px;
+    overflow-y: auto;
+  }
+
+  /* IO paths */
+  .io-group + .io-group { margin-top: 10px; }
+  .io-group-label { font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 4px; }
+  .io-list { list-style: none; font-size: 12px; }
+  .io-list li { padding: 3px 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .io-path { font-family: var(--mono); color: var(--text-secondary); font-size: 11px; }
+  .io-tag {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-weight: 500;
+    background: var(--bg-hover);
+    color: var(--text-secondary);
+  }
+  .io-tag-warn { background: var(--amber-bg); color: var(--amber); }
+  /* Resolved-IO section (polish): collapsed by default via native <details>. */
+  .io-section > summary.io-section-summary {
+    cursor: pointer; font-size: 11px; font-weight: 700; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.6px; padding: 2px 0; list-style: revert;
+  }
+  .io-section[open] > summary.io-section-summary { margin-bottom: 6px; }
+  .io-file-list { list-style: none; margin: 2px 0 4px 14px; width: 100%; }
+  .io-file-list > li { padding: 2px 0; display: block; }
+  .io-empty { font-size: 11px; color: var(--text-muted); font-style: italic; }
+  .io-preview { margin-top: 3px; }
+  .io-preview > summary { cursor: pointer; font-size: 10px; color: var(--blue); }
+  .io-pre {
+    font-family: var(--mono); font-size: 11px; white-space: pre-wrap; word-break: break-word;
+    max-height: 320px; overflow: auto; margin-top: 4px; padding: 6px 8px;
+    background: var(--bg-section); border-radius: 4px; color: var(--text-secondary);
+  }
+
+  /* Modified files */
+  .file-list { list-style: none; font-family: var(--mono); font-size: 11px; margin-top: 6px; }
+  .file-list li { padding: 2px 0; color: var(--text-secondary); }
+  .file-list li::before { content: '↳ '; color: var(--text-muted); }
+
+  /* Details/summary */
+  details { margin-top: 4px; }
+  details summary { font-size: 12px; color: var(--accent); cursor: pointer; user-select: none; }
+  details summary:hover { text-decoration: underline; }
+  details[open] summary { margin-bottom: 6px; }
+
+  /* Timing */
+  .timing-row { display: flex; gap: 20px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); }
+  .timing-row strong { color: var(--text); }
+
+  /* Summary */
+  .summary-text { font-size: 13px; color: var(--text-secondary); line-height: 1.6; }
+
+  /* ── Tool call rows (per-step) ───────────────────── */
+  .tool-call-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 12px; flex-wrap: wrap; cursor: pointer; }
+  /* Collapse-by-default: only the one-line row shows; click to reveal args+result. */
+  .tool-call-caret { display: inline-block; width: 9px; font-size: 9px; color: var(--text-muted); transition: transform 0.1s; }
+  .tool-call.expanded .tool-call-caret { transform: rotate(90deg); }
+  .tool-call-detail { display: none; margin: 2px 0 4px 20px; }
+  .tool-call.expanded .tool-call-detail { display: block; }
+  .tool-call-kv { font-family: var(--mono); font-size: 10px; color: var(--text-muted); background: var(--bg-section); padding: 4px 8px; border-radius: 4px; margin: 2px 0; white-space: pre-wrap; word-break: break-all; }
+  .tool-call-kv-tag { color: var(--text-secondary); font-weight: 600; margin-right: 6px; text-transform: uppercase; font-size: 9px; }
+  .tool-call-name { font-weight: 600; color: var(--purple); }
+  .tool-call-source { font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 600; text-transform: uppercase; }
+  .tool-call-source-script { background: var(--green-bg); color: var(--green); }
+  .tool-call-source-mcp { background: var(--purple-bg); color: var(--purple); }
+  .tool-call-source-builtin { background: var(--amber-bg); color: var(--amber); }
+  .tool-call-source-shell { background: var(--bg-section); color: var(--text-secondary); }
+  .tool-call-source-other { background: var(--bg-section); color: var(--text-muted); }
+  .tool-call-args { font-family: var(--mono); font-size: 10px; color: var(--text-secondary); }
+  .tool-call-preview { font-family: var(--mono); font-size: 10px; color: var(--text-muted); background: var(--bg-section); padding: 3px 8px; border-radius: 4px; margin: 2px 0 2px 20px; max-height: 40px; overflow: hidden; cursor: pointer; white-space: pre-wrap; word-break: break-all; }
+  .tool-call-preview.expanded { max-height: none; }
+  .tool-calls-section { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--border-light); }
+  .tool-calls-section-title { font-size: 11px; font-weight: 600; color: var(--purple); margin-bottom: 4px; }
+  .tool-warning-box { background: var(--amber-bg); border: 1px solid var(--amber); border-radius: var(--radius-sm); padding: 8px 12px; margin: 6px 0; }
+  .tool-warning-row { display: flex; align-items: flex-start; gap: 6px; font-size: 12px; color: var(--amber); padding: 3px 0; }
+  .tool-warning-icon { flex: 0 0 auto; font-size: 14px; line-height: 1; }
+  .tool-warning-text { flex: 1; }
+  .tool-warning-tool { font-weight: 600; }
+  .tool-warning-type { font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 600; text-transform: uppercase; background: var(--amber-bg); border: 1px solid var(--amber); }
+  .timeline-tc-marker { width: 6px; height: 6px; border-radius: 50%; position: absolute; top: 50%; transform: translateY(-50%); cursor: pointer; z-index: 2; opacity: 0.9; }
+  .timeline-tc-marker:hover { opacity: 1; transform: translateY(-50%) scale(1.5); }
+  .timeline-tc-marker-script { background: var(--green); }
+  .timeline-tc-marker-mcp { background: var(--purple); }
+  .timeline-tc-marker-builtin { background: var(--amber); }
+  .timeline-tc-marker-shell { background: var(--text-secondary); }
+  .timeline-tc-marker-other { background: var(--text-muted); }
+
+  /* Utility */
+  .hidden { display: none !important; }
+  .mono { font-family: var(--mono); }
+</style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-logo">Trace Viewer <span>| Riglane</span> <span style="font-size:10px;opacity:0.35">v2.5 (2026-08-06)</span></div>
+    <div class="header-actions">
+      <button class="btn hidden" id="btnLoad" onclick="openFilePicker()">Load Trace</button>
+      <button class="btn hidden" id="btnAutoRefresh" onclick="toggleAutoRefresh()">Auto-refresh</button>
+      <input type="file" id="fileInput" accept=".json,.trace.json">
+      <button class="btn" id="btnTheme" onclick="toggleTheme()">Dark</button>
+    </div>
+  </div>
+
+  <div id="dropZone" class="drop-zone">
+    <h2>Load a Trace File</h2>
+    <p>Drag & drop a <code>.trace.json</code> file here, or click to browse</p>
+    <button class="btn btn-primary" onclick="openFilePicker()">Choose File</button>
+  </div>
+
+  <div id="content" class="main hidden"></div>
+
+  <script>
+    // ─── Workflow Studio integration ─────────────────────
+    // Opened top-level (not embedded), redirect to the unified Workflow Studio
+    // (Traces section), preserving the ?trace= deep link so the engine's
+    // auto-open lands in the new tool. Inside the studio iframe (window.top
+    // differs) this is skipped and the viewer runs verbatim.
+    if (window.self === window.top) {
+      try {
+        const _p = new URLSearchParams(location.search);
+        const _t = _p.get('trace');
+        // The per-serve token MUST survive this hop — the engine's auto-open
+        // URL carries it, and every token-gated POST the studio makes (inbox
+        // respond, save, validate) 403s without it.
+        const _tok = _p.get('rl_token');
+        window.location.replace('workflow-studio.html?section=traces'
+          + (_t ? '&trace=' + encodeURIComponent(_t) : '')
+          + (_tok ? '&rl_token=' + encodeURIComponent(_tok) : ''));
+      } catch (e) {}
+    }
+    // ─── State ───────────────────────────────────────────
+    let trace = null;
+    let fileHandle = null;       // FileSystemFileHandle for auto-refresh
+    let autoRefreshTimer = null; // setInterval ID
+    let lastTraceJson = '';      // raw JSON for change detection
+
+    // Workflow Studio hook: render a trace from raw JSON text (studio "Load
+    // trace" file picker hands the text in). Function-hoisted; runs after
+    // render() is defined.
+    window.__studioLoadTraceText = function (text) {
+      try { trace = JSON.parse(text); lastTraceJson = text; render(); }
+      catch (e) { try { alert('Invalid trace JSON: ' + e.message); } catch (x) {} }
+    };
+
+    // ─── Toast notification ──────────────────────────────
+    function showToast(msg, type = 'updated') {
+      const el = document.createElement('div');
+      el.className = `toast toast-${type}`;
+      el.textContent = msg;
+      document.body.appendChild(el);
+      el.addEventListener('animationend', () => el.remove());
+    }
+
+    // ─── Auto-refresh (File System Access API) ───────────
+    function toggleAutoRefresh() {
+      if (autoRefreshTimer) { stopAutoRefresh(); return; }
+      startAutoRefresh();
+    }
+
+    async function startAutoRefresh() {
+      // If no file handle yet, try to acquire one from the already-loaded file.
+      if (!fileHandle) {
+        if (!window.showOpenFilePicker) {
+          showToast('Auto-refresh requires Chrome/Edge (File System Access API)', 'info');
+          return;
+        }
+        // Ask user to re-select the same file (needed for FS handle permission).
+        try {
+          const [handle] = await window.showOpenFilePicker({
+            types: [{ description: 'Trace JSON', accept: { 'application/json': ['.json'] } }],
+          });
+          fileHandle = handle;
+        } catch {
+          return; // User cancelled
+        }
+      }
+      // Snapshot current content for change detection.
+      try {
+        const file = await fileHandle.getFile();
+        lastTraceJson = await file.text();
+      } catch {}
+      const btn = document.getElementById('btnAutoRefresh');
+      btn.classList.add('btn-auto-refresh-on');
+      btn.textContent = 'Auto-refresh';
+      autoRefreshTimer = setInterval(pollFile, 5000);
+      showToast('Auto-refresh ON (5s)', 'info');
+    }
+
+    function stopAutoRefresh() {
+      if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
+      const btn = document.getElementById('btnAutoRefresh');
+      btn.classList.remove('btn-auto-refresh-on');
+      btn.textContent = 'Auto-refresh';
+    }
+
+    // Apply a freshly-read trace JSON string: diff vs current, re-render, and
+    // show an informative toast. Shared by the File System Access API poll
+    // (pollFile) and the http URL poll (pollUrl). No-op if unchanged.
+    function applyNewTraceText(text) {
+      if (text === lastTraceJson) return; // No change
+      lastTraceJson = text;
+      const prev = trace;
+      trace = JSON.parse(text);
+
+      // Detect what changed for toast message
+      const prevSteps = (prev && prev.steps) ? prev.steps.length : 0;
+      const curSteps = (trace.steps || []).length;
+      const lastStep = curSteps > 0 ? trace.steps[curSteps - 1] : null;
+      let toastMsg = 'Trace updated';
+      if (curSteps > prevSteps && lastStep) {
+        toastMsg = `Step ${curSteps}: ${lastStep.name} (${lastStep.status || 'new'})`;
+      } else if (lastStep && lastStep.status === 'completed' && prev) {
+        const prevStep = prev.steps && prev.steps.find(s => s.name === lastStep.name);
+        if (prevStep && prevStep.status !== 'completed') {
+          toastMsg = `Step completed: ${lastStep.name}`;
+        }
+      }
+      if (trace.status === 'completed' || trace.status === 'failed') {
+        toastMsg = `Workflow ${trace.status}`;
+        stopAutoRefresh();
+      }
+
+      render();
+      showToast(toastMsg);
+    }
+
+    async function pollFile() {
+      if (!fileHandle) { stopAutoRefresh(); return; }
+      try {
+        const file = await fileHandle.getFile();
+        applyNewTraceText(await file.text());
+      } catch {
+        // File read error — skip this poll cycle
+      }
+    }
+
+    // ─── Theme ───────────────────────────────────────────
+    function toggleTheme() {
+      const d = document.documentElement;
+      const dark = d.getAttribute('data-theme') === 'dark';
+      d.setAttribute('data-theme', dark ? 'light' : 'dark');
+      document.getElementById('btnTheme').textContent = dark ? 'Dark' : 'Light';
+    }
+
+    // ─── File loading ─────────────────────────────────────
+    const dz = document.getElementById('dropZone');
+    const fi = document.getElementById('fileInput');
+    dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('dragover'); });
+    dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
+    dz.addEventListener('drop', async e => {
+      e.preventDefault(); dz.classList.remove('dragover');
+      // Try to get FileSystemFileHandle from drop (Chrome 86+).
+      const items = e.dataTransfer.items;
+      if (items && items.length > 0 && items[0].getAsFileSystemHandle) {
+        try {
+          const handle = await items[0].getAsFileSystemHandle();
+          if (handle && handle.kind === 'file') { fileHandle = handle; }
+        } catch {}
+      }
+      if (e.dataTransfer.files.length) loadFile(e.dataTransfer.files[0]);
+    });
+    // Primary file open: use showOpenFilePicker (gives persistent handle for
+    // auto-refresh) with fallback to <input type="file"> for Firefox.
+    async function openFilePicker() {
+      if (window.showOpenFilePicker) {
+        try {
+          const [handle] = await window.showOpenFilePicker({
+            types: [{ description: 'Trace JSON', accept: { 'application/json': ['.json'] } }],
+          });
+          fileHandle = handle;
+          const file = await handle.getFile();
+          loadFile(file);
+        } catch { /* user cancelled */ }
+      } else {
+        fi.click(); // Fallback
+      }
+    }
+    dz.addEventListener('click', e => { if (e.target.tagName !== 'BUTTON') openFilePicker(); });
+    fi.addEventListener('change', () => { if (fi.files.length) loadFile(fi.files[0]); });
+
+    function loadFile(file) {
+      const reader = new FileReader();
+      reader.onload = e => {
+        try {
+          lastTraceJson = e.target.result;
+          trace = JSON.parse(lastTraceJson);
+          render();
+          // Auto-start refresh if we have a file handle and trace is in_progress.
+          if (fileHandle && !autoRefreshTimer && trace.status === 'in_progress') {
+            startAutoRefresh();
+          }
+        }
+        catch (err) { alert('Invalid JSON: ' + err.message); }
+      };
+      reader.readAsText(file, 'UTF-8');
+    }
+
+    // ─── Auto-load via ?trace= URL param (served over http) ──
+    // When opened by the engine (auto_open_trace_viewer) the page is served
+    // over http://127.0.0.1, so fetch() of the trace works (unlike file://).
+    // Live updates use plain re-fetch polling — no File System Access API, so
+    // this path works in every browser including Firefox.
+    function startUrlAutoRefresh(url) {
+      if (autoRefreshTimer) return;
+      const btn = document.getElementById('btnAutoRefresh');
+      btn.classList.remove('hidden');
+      btn.classList.add('btn-auto-refresh-on');
+      btn.textContent = 'Auto-refresh';
+      autoRefreshTimer = setInterval(() => pollUrl(url), 5000);
+      showToast('Auto-refresh ON (5s)', 'info');
+    }
+
+    async function pollUrl(url) {
+      try {
+        const resp = await fetch(url, { cache: 'no-store' });
+        if (!resp.ok) return;
+        applyNewTraceText(await resp.text());
+      } catch {
+        // Network/read error — skip this poll cycle (server may have stopped).
+      }
+      void pollInbox();
+      void checkToolVersion();
+    }
+
+    // ─── Stale-page detection ─────────────────────────────────────────────
+    // This page is served live from the installed tools directory, which is
+    // refreshed whenever Riglane is upgraded or the server restarts. A viewer
+    // left open across an upgrade keeps running the OLD script forever — its
+    // auto-refresh renews the DATA, never the code — so fixed defects look
+    // unfixed. Poll our own URL (HEAD, no body) and compare Last-Modified.
+    let _toolStamp = null;
+    let _staleShown = false;
+    async function checkToolVersion() {
+      try {
+        const r = await fetch(location.pathname, { method: 'HEAD', cache: 'no-store' });
+        if (!r.ok) return;
+        const stamp = r.headers.get('Last-Modified');
+        if (!stamp) return;
+        if (_toolStamp === null) { _toolStamp = stamp; return; }
+        if (stamp !== _toolStamp && !_staleShown) { _staleShown = true; showStaleBanner(); }
+      } catch { /* offline — try again next cycle */ }
+    }
+    function showStaleBanner() {
+      const bar = document.createElement('div');
+      bar.className = 'stale-banner';
+      bar.innerHTML = '<span>This viewer was updated on disk — you are running the older page.</span>';
+      const btn = document.createElement('button');
+      btn.textContent = 'Reload';
+      btn.onclick = () => location.reload();
+      bar.appendChild(btn);
+      document.body.appendChild(bar);
+    }
+
+    // ─── Run inbox (human-gate dialog on the step cards) ──────────────────
+    // Served traces only: the run's inbox rides the same server. A step whose
+    // human gate uses the inbox channel gets an answer dialog right on its
+    // card; the POST carries the per-serve token this page was opened with.
+    let inboxCtx = null;      // { base, runId, token } — null when not served
+    let inboxMsgs = [];
+    let _inboxSig = '';
+    const _ivDraft = {};      // message_id → { choice, text }
+
+    function initInbox(traceUrl) {
+      const m = /^(.*?)\/local\/workflow_runs\/([^/]+)\/trace\.json/.exec(traceUrl || '');
+      if (!m) return;
+      let token = null;
+      try { token = new URLSearchParams(location.search).get('rl_token'); } catch (e) { token = null; }
+      inboxCtx = { base: m[1] || '', runId: m[2], token };
+      void pollInbox();
+    }
+    async function pollInbox() {
+      if (!inboxCtx) return;
+      try {
+        const r = await fetch(inboxCtx.base + '/api/inbox.json?run=' + encodeURIComponent(inboxCtx.runId), { cache: 'no-store' });
+        if (!r.ok) return;
+        const list = await r.json();
+        if (!Array.isArray(list)) return;
+        const sig = JSON.stringify(list.map(x => [x.message_id, msgState(x), x.response ? x.response.type : null]));
+        if (sig !== _inboxSig) { _inboxSig = sig; inboxMsgs = list; if (trace) render(); }
+      } catch (e) { /* inbox unreachable — cards simply carry no dialog */ }
+      void pollRunActive();
+    }
+    /* Is the run's engine process actually ALIVE? Drives the live-spin wheel:
+       an in_progress label over a dead run must not spin (that lie is what
+       liveness surfaces exist to end). Unreachable API → no wheel. */
+    let runActive = false;
+    async function pollRunActive() {
+      if (!inboxCtx) return;
+      try {
+        const r = await fetch(inboxCtx.base + '/api/runs.json', { cache: 'no-store' });
+        if (!r.ok) return;
+        const runs = await r.json();
+        const me = Array.isArray(runs) ? runs.find(x => x.run_id === inboxCtx.runId) : null;
+        const next = !!me && me.state === 'running';
+        if (next !== runActive) { runActive = next; if (trace) render(); }
+      } catch (e) { /* not served — the wheel simply stays off */ }
+    }
+    function liveSpin(statusish) {
+      const s = String(statusish || '');
+      return runActive && (s === 'in_progress' || s === 'in-progress')
+        ? '<span class="live-spin" title="The engine process is alive and working"></span>'
+        : '';
+    }
+    /* The same reading of state the engine uses (inbox.ts messageState): a
+       question the run RETIRED (its step asked again after a continue) is not
+       pending — offering its dialog would mean a press that comes back refused. */
+    function msgState(m) {
+      if (m.response) return 'answered';
+      if (m.superseded_by) return 'superseded';
+      return 'open';
+    }
+    function stepInboxPending(name) {
+      return inboxMsgs.find(x => x.step === name && msgState(x) === 'open') || null;
+    }
+    function stepInboxAnswered(name) {
+      const a = inboxMsgs.filter(x => x.step === name && x.response);
+      return a.length ? a[a.length - 1] : null;
+    }
+
+    (async function initFromUrlParam() {
+      let traceUrl;
+      try { traceUrl = new URLSearchParams(location.search).get('trace'); } catch { traceUrl = null; }
+      if (!traceUrl) return;
+      try {
+        const resp = await fetch(traceUrl, { cache: 'no-store' });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        lastTraceJson = await resp.text();
+        trace = JSON.parse(lastTraceJson);
+        initInbox(traceUrl);
+        render();
+        if (trace.status === 'in_progress') startUrlAutoRefresh(traceUrl);
+      } catch (err) {
+        showToast('Could not auto-load trace: ' + err.message, 'info');
+      }
+    })();
+
+    // ─── Formatting helpers ───────────────────────────────
+    function fmtDuration(ms) {
+      if (ms == null) return '--';
+      if (ms < 1000) return ms + 'ms';
+      const s = Math.floor(ms / 1000);
+      if (s < 60) return s + 's';
+      const m = Math.floor(s / 60), rs = s % 60;
+      if (m < 60) return m + 'm' + (rs ? ' ' + rs + 's' : '');
+      const h = Math.floor(m / 60), rm = m % 60;
+      return h + 'h' + (rm ? ' ' + rm + 'm' : '');
+    }
+    function fmtTime(iso) {
+      if (!iso) return '--';
+      try { return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
+      catch { return iso; }
+    }
+    function fmtDate(iso) {
+      if (!iso) return '--';
+      try { return new Date(iso).toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' }); }
+      catch { return iso; }
+    }
+    // tool-trace rebuild: read the hook-ledger record shape with legacy fallbacks.
+    // Badge by `kind` (mcp/script/builtin/shell) — NOT `source` (now always
+    // 'hook', the capture mechanism, not the tool type). '' ⇒ no badge.
+    function tcKind(tc) {
+      if (tc.kind) return tc.kind;
+      if (tc.source === 'tool_server') return 'script';   // legacy traces
+      if (tc.source === 'mcp_transcript') return 'mcp';   // legacy traces
+      return '';
+    }
+    function tcTs(tc) { return tc.ts || tc.timestamp || null; }
+    function tcArgsObj(tc) { const a = tc.args != null ? tc.args : tc.arguments; return (a && typeof a === 'object') ? a : null; }
+    function tcResult(tc) { return tc.result_preview || tc.output_preview || ''; }
+    // Badge label: a workflow script tool (invoked via the workflow_tools MCP
+    // server, kind 'script') shows as WF-TOOL to set it apart from external MCP
+    // and from a shell-run script. The CSS class stays tool-call-source-script.
+    function tcKindLabel(k) { return k === 'script' ? 'wf-tool' : k; }
+    // Badge HTML for a tool call. Usually one badge (by kind). A shell call that
+    // actually RAN a declared workflow script tool (wf_tool set — matched by the
+    // engine on the script-file basename) gets TWO badges: WF-TOOL + BASH — it is
+    // a workflow script tool, just invoked via the shell instead of the MCP server.
+    function tcBadgesHtml(c) {
+      const kind = tcKind(c);
+      if (!kind) return '';
+      if (c.wf_tool && kind === 'shell') {
+        return '<span class="tool-call-source tool-call-source-script" title="ran declared script tool \'' + esc(c.wf_tool) + '\' via the shell">wf-tool</span>'
+             + '<span class="tool-call-source tool-call-source-shell">bash</span>';
+      }
+      return '<span class="tool-call-source tool-call-source-' + kind + '">' + tcKindLabel(kind) + '</span>';
+    }
+    function statusClass(s) { return (s || 'pending').replace(/_/g, '-'); }
+
+    const chevronSVG = `<svg class="step-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 6 15 12 9 18"/></svg>`;
+
+    // ─── Render ───────────────────────────────────────────
+    function render() {
+      document.getElementById('dropZone').classList.add('hidden');
+      document.getElementById('btnLoad').classList.remove('hidden');
+      document.getElementById('btnAutoRefresh').classList.remove('hidden');
+      const c = document.getElementById('content');
+      c.classList.remove('hidden');
+      // Expansion lives only in the DOM ('open' classes) — a full innerHTML
+      // rebuild would collapse every open card (live: marking an answer in a
+      // grouped inbox dialog closed the dialog mid-answer; auto-refresh did
+      // the same). Snapshot the open ids and re-apply after the rebuild.
+      const openIds = Array.from(c.querySelectorAll('.step-card.open, .orch-panel.open'))
+        .map((el) => el.id)
+        .filter(Boolean);
+      // A rebuild also loses the reading position and any half-typed answer's
+      // focus — restore both, so marking one item does not scroll the dialog
+      // out from under the cursor.
+      const scrollY = window.scrollY;
+      const active = document.activeElement;
+      const activeKey = active && c.contains(active) && /^(INPUT|TEXTAREA)$/.test(active.tagName)
+        ? (active.getAttribute('oninput') || active.getAttribute('onchange') || null) : null;
+      // selectionStart throws on selection-less input types — never let a
+      // caret nicety break the render.
+      let selStart = null, selEnd = null;
+      try {
+        if (activeKey && active.selectionStart != null) { selStart = active.selectionStart; selEnd = active.selectionEnd; }
+      } catch (e) { selStart = null; selEnd = null; }
+      c.innerHTML = renderCard() + renderOrchestration() + renderToolCalls() + renderTimeline() + renderSteps();
+      for (const id of openIds) {
+        const el = document.getElementById(id);
+        if (el) el.classList.add('open');
+      }
+      if (activeKey) {
+        const back = c.querySelector('[oninput="' + CSS.escape(activeKey) + '"], [onchange="' + CSS.escape(activeKey) + '"]');
+        if (back) {
+          try {
+            back.focus({ preventScroll: true });
+            if (selStart != null && back.setSelectionRange) back.setSelectionRange(selStart, selEnd);
+          } catch (e) { /* focus is a nicety, never a failure */ }
+        }
+      }
+      window.scrollTo(0, scrollY);
+    }
+
+    // ── Workflow card ─────────────────────────────────────
+    function renderCard() {
+      const t = trace;
+      const sc = statusClass(t.status);
+
+      // Header row
+      const headerHtml = `<div class="wf-header">
+        <div class="wf-title-row">
+          <span class="wf-name">${esc(t.workflow || 'Unknown')}</span>
+          <span class="wf-version">v${t.workflow_version || '?'}</span>
+          <span class="pill pill-${sc}">${esc(t.status || 'unknown')}${liveSpin(t.status)}</span>
+        </div>
+        <div class="wf-meta">
+          <span>Run: <strong class="mono">${esc(t.run_id || '--')}</strong></span>
+          <span>Started: <strong>${fmtDate(t.started_at)} ${fmtTime(t.started_at)}</strong></span>
+          <span>Duration: <strong>${fmtDuration(t.total_duration_ms)}</strong></span>
+        </div>
+      </div>`;
+
+      // Description section (optional)
+      let descHtml = '';
+      if (t.description) {
+        descHtml = `<div class="wf-section">
+          <div class="wf-section-label">Description</div>
+          <div class="wf-description">${esc(t.description.trim())}</div>
+        </div>`;
+      }
+
+      // Parameters section
+      let paramsHtml = '';
+      const params = t.params || {};
+      const paramKeys = Object.keys(params);
+      if (paramKeys.length) {
+        const defs = {};
+        (t.param_defs || []).forEach(d => { defs[d.name] = d; });
+
+        const rows = paramKeys.map(k => {
+          const v = params[k];
+          const def = defs[k];
+          const isUnset = v == null;
+          const valHtml = isUnset
+            ? `<div class="param-value unset">(not set)</div>`
+            : `<div class="param-value">${esc(String(v))}</div>`;
+          const descHtml = (def && def.description)
+            ? `<div class="param-desc">${esc(def.description.trim())}</div>`
+            : '';
+          return `<div class="param-row">
+            <div class="param-name">${esc(k)}</div>
+            <div class="param-value-cell">${valHtml}${descHtml}</div>
+          </div>`;
+        }).join('');
+
+        paramsHtml = `<div class="wf-section">
+          <div class="wf-section-label">Parameters</div>
+          <div class="param-table">${rows}</div>
+        </div>`;
+      }
+
+      // Spawn-throttle indicator (workflow-level parallel_spawn_delay_ms).
+      // Display only when feature is configured (>0). Helps users verify
+      // throttle is active without inspecting workflow.yaml.
+      const wfSpawnDelay = t.parallel_spawn_delay_ms;
+      if (typeof wfSpawnDelay === 'number' && wfSpawnDelay > 0) {
+        paramsHtml += `<div class="wf-section">
+          <div class="wf-section-label">Spawn throttle</div>
+          <div class="param-table">
+            <div class="param-row">
+              <div class="param-name">parallel_spawn_delay_ms</div>
+              <div class="param-value-cell">
+                <div class="param-value">${esc(String(wfSpawnDelay))}</div>
+                <div class="param-desc">Workflow-level default: delay between first and subsequent parallel-subagent spawns (ms). Reduces prompt-cache misses by letting the first subagent populate cache before others spawn. Per-step parallel_spawn_delay_ms overrides.</div>
+              </div>
+            </div>
+          </div>
+        </div>`;
+      }
+
+      // Gate config (optional)
+      let gateColHtml = '';
+      const gc = t.gate_config;
+      if (gc) {
+        const gateTips = {
+          structural: 'Validates outputs against struct schemas: file existence, field types, required fields, patterns. Deterministic, fast. Run by riglane gate-check.',
+          semantic: 'LLM evaluates output completeness, correctness and coherence. Slower but catches quality issues that structural checks miss.',
+          human: 'Requires explicit user approval before proceeding. Used for critical decision points.'
+        };
+        const chips = ['structural', 'semantic', 'human'].map(name => {
+          const on = gc[name];
+          const cls = on ? 'gate-chip gate-chip-on' : 'gate-chip gate-chip-off';
+          return `<span class="${cls}" data-tip="${esc(gateTips[name])}"><span class="gate-chip-dot"></span>${esc(name)}</span>`;
+        }).join('');
+        gateColHtml = `<div class="wf-bottom-col">
+          <div class="wf-section-label">Gate</div>
+          <div class="gate-chips">${chips}</div>
+          <div class="gate-retries"><span data-tip="Max in-place retries per subagent when structural gate fails. Same session, preserved context.">gate retries: ${gc.max_gate_retries ?? 5}</span>&nbsp;&nbsp;·&nbsp;&nbsp;<span data-tip="Max new subagent spawns per step after gate retries are exhausted. Fresh context each time.">step retries: ${gc.max_step_retries ?? 3}</span></div>
+          <div class="gate-retries" style="margin-top:4px"><span data-tip="When false (default), the engine refuses to advance from a parallel step until every failed branch is re-spawned and passes. When true, the workflow may continue with whatever results succeeded, skipping permanently-failed branches. Hard rule (cannot be overridden): if ALL branches fail, or a non-parallel step exhausts retries, the engine always halts.">allow_partial_step_complete: ${gc.allow_partial_step_complete === true ? 'true' : 'false'}</span></div>
+        </div>`;
+      }
+
+      // Context section (optional)
+      let contextColHtml = '';
+      if (t.context && Object.keys(t.context).length) {
+        const ctxTips = {
+          carry_forward: {
+            summary: 'After each step passes, orchestrator writes a summary to context/. Next step receives previous summaries injected into its task prompt. Individual steps can opt out with carry_forward: false.',
+            none: 'No context is passed between steps. Each step starts with only its declared inputs. Individual steps can opt in with carry_forward: true.'
+          }
+        };
+        const chips = Object.entries(t.context).map(([k, v]) => {
+          const tip = (ctxTips[k] && ctxTips[k][v]) || (ctxTips[k] && ctxTips[k].summary) || '';
+          return `<span class="context-chip"${tip ? ` data-tip="${esc(tip)}"` : ''}><span class="context-chip-key">${esc(k)}:</span><span class="context-chip-val">${esc(String(v))}</span></span>`;
+        }).join('');
+        contextColHtml = `<div class="wf-bottom-col">
+          <div class="wf-section-label">Context</div>
+          <div class="context-chips">${chips}</div>
+        </div>`;
+      }
+
+      // Run environment: host + orchestrator model (optional — traces ≥2026-07-27).
+      // Engine stamps it at workflow_init from the MCP clientInfo + a best-effort
+      // read of the host's project config model pin.
+      let hostColHtml = '';
+      const th = t.host;
+      if (th && (th.id || th.client_name)) {
+        const hostLabel = th.id || th.client_name;
+        const hostTip = `MCP clientInfo: ${th.client_name || 'unknown'}${th.client_version ? ' v' + th.client_version : ''}. The host application that drove this run (recorded at workflow_init).`;
+        const modelVal = th.orchestrator_model || 'unknown';
+        const modelTip = th.orchestrator_model
+          ? 'Orchestrator model as CONFIGURED in the host\'s project config at workflow_init. The live session model may differ if switched host-side.'
+          : 'This host keeps no model pin in project config — the engine cannot observe the live session model.';
+        hostColHtml = `<div class="wf-bottom-col">
+          <div class="wf-section-label">Host</div>
+          <div class="context-chips">
+            <span class="context-chip" data-tip="${esc(hostTip)}"><span class="context-chip-key">host:</span><span class="context-chip-val">${esc(String(hostLabel))}${th.client_version ? ' v' + esc(String(th.client_version)) : ''}</span></span>
+            <span class="context-chip" data-tip="${esc(modelTip)}"><span class="context-chip-key">orchestrator model:</span><span class="context-chip-val">${esc(String(modelVal))}</span></span>
+          </div>
+        </div>`;
+      }
+
+      // Stats
+      const statsHtml = `<div class="wf-bottom-col-right">
+        <div class="wf-section-label">Run Stats</div>
+        <div class="stats">
+          <div class="stat"><span class="stat-val">${t.total_messages ?? '--'}</span><span class="stat-label">messages</span></div>
+          <div class="stat"><span class="stat-val">${t.total_tool_calls ?? '--'}</span><span class="stat-label">tool calls</span></div>
+          <div class="stat"><span class="stat-val">${t.total_modified_files ?? '--'}</span><span class="stat-label">files</span></div>
+          <div class="stat"><span class="stat-val">${(t.steps || []).length}</span><span class="stat-label">steps</span></div>
+          ${t.total_mcp_calls ? `<div class="stat"><span class="stat-val">${t.total_mcp_calls}</span><span class="stat-label">MCP calls</span></div>` : ''}
+          ${t.total_tool_calls_proxy ? `<div class="stat"><span class="stat-val">${t.total_tool_calls_proxy}</span><span class="stat-label">tool calls (proxy)</span></div>` : ''}
+        </div>
+      </div>`;
+
+      const bottomHtml = `<div class="wf-section">
+        <div class="wf-bottom-row">${gateColHtml}${contextColHtml}${hostColHtml}${statsHtml}</div>
+      </div>`;
+
+      const warningsHtml = renderWarnings(t.warnings);
+      return `<div class="wf-card">${headerHtml}${descHtml}${paramsHtml}${bottomHtml}</div>${warningsHtml}`;
+    }
+
+    function renderWarnings(warnings) {
+      if (!warnings || !warnings.length) return '';
+      const items = warnings.map(w => `<li>${esc(String(w))}</li>`).join('');
+      return `<div class="warnings-banner">
+        <div class="warnings-title">&#9888; Warnings (${warnings.length})</div>
+        <ul class="warnings-list">${items}</ul>
+      </div>`;
+    }
+
+    // ── Orchestration (MCP calls) ────────────────────────
+    function renderOrchestration() {
+      const calls = trace.mcp_calls;
+      if (!calls || !calls.length) return '';
+
+      const totalMs = calls.reduce((s, c) => s + (c.duration_ms || 0), 0);
+
+      const toolColors = {
+        workflow_resolve: 'gray', workflow_init: 'blue', workflow_resume: 'blue',
+        step_begin: 'purple', step_collect_result: 'amber',
+        step_complete: 'green', workflow_finalize: 'blue',
+        list_agent_files: 'gray'
+      };
+
+      const rows = calls.map((c, i) => {
+        const color = toolColors[c.tool] || 'gray';
+        const ok = c.success !== false;
+        const dotCls = ok ? `orch-dot orch-dot-${color}` : 'orch-dot orch-dot-fail';
+        const time = fmtTime(c.timestamp);
+        const dur = c.duration_ms != null ? `${c.duration_ms}ms` : '';
+        const step = c.step ? `<span class="orch-step">${esc(c.step)}</span>` : '';
+        const summary = c.summary ? `<span class="orch-summary">${esc(c.summary)}</span>` : '';
+        const errHtml = c.error ? `<span class="orch-error">${esc(c.error)}</span>` : '';
+        return `<div class="orch-row${ok ? '' : ' orch-row-fail'}">
+          <span class="orch-time">${time}</span>
+          <span class="${dotCls}"></span>
+          <span class="orch-tool">${esc(c.tool)}</span>
+          ${step}
+          <span class="orch-dur">${dur}</span>
+          ${summary}${errHtml}
+        </div>`;
+      }).join('');
+
+      return `<div class="wf-card orch-panel" id="orchPanel">
+        <div class="orch-header" onclick="document.getElementById('orchPanel').classList.toggle('open')">
+          <span class="step-chevron">&#9654;</span>
+          <span class="orch-title">Orchestration</span>
+          <span class="orch-meta">${calls.length} MCP calls &middot; ${totalMs}ms</span>
+        </div>
+        <div class="orch-body">${rows}</div>
+      </div>`;
+    }
+
+    // ── Tool Calls (proxy) ─────────────────────────────────
+    function renderToolCalls() {
+      const calls = trace.tool_calls;
+      if (!calls || !calls.length) return '';
+
+      const totalMs = calls.reduce((s, c) => s + (c.duration_ms || 0), 0);
+      const successes = calls.filter(c => c.success !== false).length;
+
+      const rows = calls.map((c, i) => {
+        const ok = c.success !== false;
+        const dotCls = ok ? 'orch-dot orch-dot-green' : 'orch-dot orch-dot-fail';
+        const time = fmtTime(tcTs(c));
+        const toolName = c.tool_short || c.tool || '?';
+        const stepBadge = c.step ? `<span class="orch-step">${esc(c.step)}</span>` : '';
+        const dur = c.duration_ms != null ? `<span class="orch-dur">${c.duration_ms}ms</span>` : '';
+        const argsObj = tcArgsObj(c);
+        const args = argsObj && Object.keys(argsObj).length
+          ? `<span class="tool-call-args">${esc(Object.entries(argsObj).map(([k,v]) => k + '=' + v).join(', '))}</span>`
+          : '';
+        const errHtml = c.error ? `<span class="orch-error">${esc(c.error)}</span>` : '';
+        const outLen = c.output_length ? `<span class="orch-summary" title="output size">${c.output_length} chars output</span>` : '';
+        const exitCode = c.exit_code != null && c.exit_code !== 0 ? `<span class="orch-error">exit ${c.exit_code}</span>` : '';
+        return `<div class="orch-row${ok ? '' : ' orch-row-fail'}">
+          <span class="orch-time">${time}</span>
+          <span class="${dotCls}"></span>
+          <span class="tool-call-name">${esc(toolName)}</span>
+          ${tcBadgesHtml(c)}
+          ${stepBadge}
+          ${args}
+          ${dur}
+          ${outLen}${exitCode}${errHtml}
+        </div>`;
+      }).join('');
+
+      return `<div class="wf-card orch-panel" id="toolCallsPanel">
+        <div class="orch-header" onclick="document.getElementById('toolCallsPanel').classList.toggle('open')">
+          <span class="step-chevron">&#9654;</span>
+          <span class="orch-title" style="color:var(--purple)">Tool Calls (all steps)</span>
+          <span class="orch-meta">${calls.length} calls &middot; ${successes} ok &middot; ${totalMs}ms</span>
+        </div>
+        <div class="orch-body">${rows}</div>
+      </div>`;
+    }
+
+    // ── Timeline ──────────────────────────────────────────
+    function renderTimeline() {
+      const steps = trace.steps || [];
+      if (!steps.length) return '';
+      const totalMs = steps.reduce((s, st) => s + (st.duration_ms || 1000), 0);
+
+      const segs = steps.map((st, i) => {
+        const flex = Math.max(3, ((st.duration_ms || 1000) / totalMs) * 100);
+        const cls = statusClass(st.status);
+        // Tool-call dots live on the per-step Subagent Timeline (attributed to
+        // the calling subagent), not here on the global step bar.
+        return `<div class="timeline-seg ${cls}" style="flex:${flex} 1 0" onclick="scrollToStep(${i})" title="${esc(st.name)}: ${fmtDuration(st.duration_ms)}">${esc(st.name)}</div>`;
+      }).join('');
+
+      const durs = steps.map((st) => {
+        const flex = Math.max(3, ((st.duration_ms || 1000) / totalMs) * 100);
+        return `<div class="timeline-dur" style="flex:${flex} 1 0">${fmtDuration(st.duration_ms)}</div>`;
+      }).join('');
+
+      return `<div class="timeline">
+        <div class="timeline-label">Timeline</div>
+        <div class="timeline-bar">${segs}</div>
+        <div class="timeline-durations">${durs}</div>
+      </div>`;
+    }
+
+    // ── Step cards ────────────────────────────────────────
+    // Emit one card (+ optional embedded child group) for a step entry.
+    function emitCardWithChildren(parts, st, cardIdx, idPrefix) {
+      parts.push(renderStepCard(st, cardIdx, idPrefix));
+      // Child workflow group: show embedded child steps as indented cards
+      // below the parent step. Works for both planning and delegation.
+      const childTrace = st._embedded_child_trace;
+      if (childTrace && childTrace.steps && childTrace.steps.length > 0) {
+        const isDelegation = !!st.delegate_to;
+        const groupClass = isDelegation ? ' child-workflow-group-delegation' : '';
+        // Render full child workflow view: header + timeline + steps
+        const savedTrace = trace;
+        trace = childTrace;
+        const childHeader = renderChildWorkflowHeader(childTrace);
+        const childTimeline = renderTimeline();
+        const childCards = childTrace.steps.map((cst, ci) =>
+          renderStepCard(cst, ci, `${cardIdx}-child-`)
+        ).join('');
+        trace = savedTrace;
+        // F7: delegation blocks get enter/exit dividers (amber) — the analog
+        // of loop-phase (teal) and route (violet) dividers. The child runs as
+        // its OWN run; its steps are embedded here for a single-trace view.
+        if (isDelegation) {
+          const childWfName = childTrace.workflow || st.delegate_to;
+          const childRunId = st.delegation && st.delegation.child_run_id ? st.delegation.child_run_id : '';
+          parts.push(delegationDivider(`→ delegated: ${childWfName}${childRunId ? ` ( ${childRunId} )` : ''}`, false));
+        }
+        parts.push(`<div class="child-workflow-group${groupClass}">${childHeader}${childTimeline}${childCards}</div>`);
+        if (isDelegation) {
+          parts.push(delegationDivider(`← return from ${childTrace.workflow || st.delegate_to}`, true));
+        }
+      }
+    }
+
+    function delegationDivider(label, exit) {
+      return `<div class="delegation-divider${exit ? ' delegation-divider-exit' : ''}"><span class="delegation-divider-label" data-tip="Delegated workflow block: the child executed as its OWN run (separate manifest and trace); its steps are embedded here so the whole execution reads as one trace. Files flow back via param_bindings (scalars) and from_delegated outputs (artifacts).">${esc(label)}</span></div>`;
+    }
+
+    function loopDivider(label, exit) {
+      return `<div class="loop-divider${exit ? ' loop-divider-exit' : ''}"><span class="loop-divider-label">${esc(label)}</span></div>`;
+    }
+
+    function renderSteps() {
+      const parts = [];
+      const steps = trace.steps || [];
+      const events = trace.loop_events || [];
+      const loopBacks = events.filter(e => e.kind === 'loop_back');
+      const exitEv = events.find(e => e.kind === 'loop_exit');
+
+      // Phase R: a route-transition divider is emitted whenever the route
+      // context changes between consecutive cards. Each card carries its route
+      // membership (st.route.route_id) or none (= main flow), so the path
+      // reads e.g. "main → route: critical", "route: critical → route: hotfix",
+      // "route: hotfix → main". Derived purely from the cards — no special
+      // ordering needed, works in both the linear and loop-aware paths below.
+      const routeCtx = st => (st && st.route && st.route.route_id) ? `route: ${st.route.route_id}` : 'main';
+      let prevRouteCtx = 'main';
+      const routeDivider = (from, to) =>
+        `<div class="route-divider"><span class="route-divider-label" title="Conditional routing: execution moved from ${esc(from)} into ${esc(to)}. The engine chose this route after the previous step finished — only the selected route's steps run; the alternatives are skipped.">${esc(from)} &rarr; ${esc(to)}</span></div>`;
+      // Lanes: cards carrying a lane stamp render inside their fork's lane
+      // containers, not in the main card list — group them up front. The
+      // block is emitted right after its FORK step's card, which works in
+      // both the linear and the loop-aware paths below (the fork card goes
+      // through emitCard either way). lane_events supply the join verdicts.
+      const laneGroups = new Map();   // fork_step → Map(lane_id → cards[])
+      steps.forEach(st => {
+        if (!st.lane || !st.lane.fork_step) return;
+        const fork = st.lane.fork_step;
+        if (!laneGroups.has(fork)) laneGroups.set(fork, new Map());
+        const perLane = laneGroups.get(fork);
+        const id = st.lane.lane_id || '?';
+        if (!perLane.has(id)) perLane.set(id, []);
+        perLane.get(id).push(st);
+      });
+      const laneJoinOf = fork => (trace.lane_events || []).find(
+        e => e.kind === 'lanes_join' && e.fork_step === fork);
+      const lanesDivider = (label, join, title) =>
+        `<div class="lanes-divider${join ? ' lanes-divider-join' : ''}"><span class="lanes-divider-label" title="${esc(title || '')}">${esc(label)}</span></div>`;
+      let laneCi = 0;
+      const emitLanesBlock = (parts, fork) => {
+        const perLane = laneGroups.get(fork);
+        if (!perLane) return;
+        const join = laneJoinOf(fork);
+        parts.push(lanesDivider(`\u21c9 lanes: ${perLane.size} in parallel`, false,
+          `Fork: after step '${fork}' every lane below ran CONCURRENTLY; the engine returned the cursor past the fork only when all of them reached a terminal state.`));
+        const row = [];
+        for (const [laneId, cards] of perLane) {
+          const verdict = join && join.verdicts ? join.verdicts[laneId] : null;
+          const inner = [];
+          let lanePrevCtx = `lane: ${laneId}`;
+          // Order: loop passes first (a lane may loop within itself), then
+          // definition order inside a pass; phase changes get the standard
+          // loop divider so an in-lane loop reads like a top-level one.
+          let prevPhase = null;
+          cards
+            .slice()
+            .sort((a, b) => ((a.loop_phase ?? 0) - (b.loop_phase ?? 0)) || ((a.index ?? 0) - (b.index ?? 0)))
+            .forEach(st => {
+              const ph = st.loop_phase ?? null;
+              if (ph != null && prevPhase != null && ph !== prevPhase && ph >= 2) {
+                inner.push(loopDivider(`Begin Loop Back Phase ( ${ph} )`, false));
+              }
+              prevPhase = ph;
+              const ctx = (st.route && st.route.route_id) ? `route: ${st.route.route_id}` : `lane: ${laneId}`;
+              if (ctx !== lanePrevCtx) { inner.push(routeDivider(lanePrevCtx, ctx)); lanePrevCtx = ctx; }
+              emitCardWithChildren(inner, st, laneCi++, 'lane-');
+            });
+          row.push(`<div class="lane-group"><div class="lane-group-header">` +
+            `<span>parallel lane ${esc(laneId)}</span>` +
+            (verdict ? `<span class="pill pill-${verdict === 'completed' ? 'completed' : 'failed'}">${esc(verdict)}</span>` : '') +
+            `</div>${inner.join('')}</div>`);
+        }
+        parts.push(`<div class="lanes-row">${row.join('')}</div>`);
+        if (join) {
+          parts.push(lanesDivider(`join: require ${join.require || 'all'}`, true,
+            `Join barrier passed — the run continued past the fork. Per-lane verdicts: ` +
+            Object.entries(join.verdicts || {}).map(([k, v]) => `${k}: ${v}`).join(', ') +
+            `. The engine wrote data/${fork}-join.json (the collection index).`));
+        }
+      };
+      const emitCard = (parts, st, ci) => {
+        if (st.lane && st.lane.fork_step) return; // rendered inside its lane group
+        const ctx = routeCtx(st);
+        if (ctx !== prevRouteCtx) { parts.push(routeDivider(prevRouteCtx, ctx)); prevRouteCtx = ctx; }
+        emitCardWithChildren(parts, st, ci);
+        if (laneGroups.has(st.name)) emitLanesBlock(parts, st.name);
+      };
+
+      if (loopBacks.length === 0 && !exitEv) {
+        // No loop in this run — linear rendering, as before.
+        let ci = 0;
+        steps.forEach(st => emitCard(parts, st, ci++));
+        return parts.join('');
+      }
+
+      // Phase B: loop-aware ordering, for AS MANY loops as the run has. The
+      // engine archives each completed pass's cards (loop_archived +
+      // loop_phase) and records loop_back / loop_exit events carrying the loop
+      // range. A workflow may now hold several loops per sequence (nested or
+      // disjoint), so the earlier single-loop reading — take loopBacks[0] and
+      // treat everything after its range as "post-loop" — dropped the second
+      // loop's phase grouping entirely: its passes appeared as one flat run of
+      // cards with no dividers. Now every distinct range gets its own section.
+      //
+      // Render: cards before the first range → for each range, its passes
+      // separated by "Begin Loop Back Phase (N)" dividers and closed by
+      // "Exit Loop Phase" when that loop finished → cards between ranges →
+      // … → cards after the last range. Every card is emitted exactly once;
+      // a nested range is rendered inside its outermost container's section.
+      const rangeOf = (ev) => {
+        // Index-only events (oldest traces) carry no name list; their window
+        // comes from to_index/from_index, which `has` below falls back to.
+        const names = Array.isArray(ev.range) && ev.range.length ? new Set(ev.range) : null;
+        return {
+          owner: ev.from ?? '',
+          names,
+          toIdx: ev.to_index ?? 0,
+          fromIdx: ev.from_index ?? (steps.length - 1),
+          has: (st) => names
+            ? names.has(st.name)
+            : (st.index ?? 0) >= (ev.to_index ?? 0) && (st.index ?? 0) <= (ev.from_index ?? 0),
+        };
+      };
+      // One entry per loop OWNER (a loop emits one event per pass). Older
+      // traces wrote loop_exit without `from`; its range names it (the owner
+      // is the range's last step), so both shapes attribute correctly.
+      // Three trace generations to attribute: `from` (current), `range` (mid),
+      // and index-only (oldest — a loop_exit written before either existed).
+      // Falling through to '' dropped the Exit divider on those old traces,
+      // which the single-loop reading used to show unconditionally.
+      const nameAtIndex = (i) => {
+        const hit = steps.find((st) => (st.index ?? -1) === i);
+        return hit ? hit.name : '';
+      };
+      const ownerOfEvent = (ev) => ev.from
+        || (Array.isArray(ev.range) && ev.range.length ? ev.range[ev.range.length - 1] : '')
+        || (ev.from_index != null ? nameAtIndex(ev.from_index) : '')
+        || '';
+      const loopsByOwner = new Map();
+      for (const ev of events.filter((e) => e.kind === 'loop_back' || e.kind === 'loop_exit')) {
+        const key = ownerOfEvent(ev);
+        if (!key) continue;
+        if (!loopsByOwner.has(key)) loopsByOwner.set(key, { ...rangeOf(ev), owner: key });
+      }
+      const loops = [...loopsByOwner.values()].map((r) => {
+        let first = Infinity, last = -Infinity;
+        steps.forEach((st, k) => { if (r.has(st)) { first = Math.min(first, k); last = Math.max(last, k); } });
+        return { ...r, first, last, size: last - first };
+      }).filter((r) => r.first !== Infinity)
+        // Outer ranges first, so a nested range lands inside its container.
+        .sort((a, b) => (a.first - b.first) || (b.size - a.size));
+      const exitOwners = new Set(
+        events.filter((e) => e.kind === 'loop_exit').map(ownerOfEvent).filter(Boolean),
+      );
+      const lastPhaseOf = (owner) => loopBacks
+        .filter((e) => ownerOfEvent(e) === owner)
+        .reduce((m, e) => Math.max(m, e.next_phase || 0), 1);
+
+      // Assign every card to the OUTERMOST loop section that contains it, or
+      // to none (a standalone card between/around the loops).
+      const sectionOf = new Map();     // card position → loop entry
+      steps.forEach((st, k) => {
+        const owner = loops.find((r) => r.has(st));
+        if (owner) sectionOf.set(k, owner);
+      });
+
+      let ci = 0;
+      const emitLoopSection = (loop) => {
+        const cards = steps.filter((st, k) => sectionOf.get(k) === loop);
+        const byPhase = new Map();
+        for (const st of cards) {
+          const phase = st.loop_phase != null ? st.loop_phase : lastPhaseOf(loop.owner);
+          if (!byPhase.has(phase)) byPhase.set(phase, []);
+          byPhase.get(phase).push(st);
+        }
+        [...byPhase.keys()].sort((a, b) => a - b).forEach((p) => {
+          if (p >= 2) parts.push(loopDivider(`Begin Loop Back Phase ( ${p} )`, false));
+          byPhase.get(p)
+            .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
+            .forEach((st) => emitCard(parts, st, ci++));
+        });
+        if (exitOwners.has(loop.owner)) parts.push(loopDivider('Exit Loop Phase', true));
+      };
+
+      const emitted = new Set();
+      steps.forEach((st, k) => {
+        const loop = sectionOf.get(k);
+        if (!loop) { emitCard(parts, st, ci++); return; }
+        if (emitted.has(loop)) return;       // its whole section is already out
+        emitted.add(loop);
+        emitLoopSection(loop);
+      });
+      return parts.join('');
+    }
+
+    // Compact header for embedded child workflow (used in child-workflow-group).
+    function renderChildWorkflowHeader(ct) {
+      const sc = statusClass(ct.status);
+      const wfName = ct.workflow || '(child)';
+      const stepCount = (ct.steps || []).length;
+      const activeSteps = (ct.steps || []).filter(s => s.status === 'completed').length;
+      return `<div class="child-workflow-group-header">
+        <span style="font-size:13px;text-transform:none;letter-spacing:0">${esc(wfName)}</span>
+        <span class="pill pill-${sc}">${esc(ct.status || 'pending')}</span>
+        <span>${activeSteps}/${stepCount} steps</span>
+        <span>${fmtDuration(ct.total_duration_ms)}</span>
+        ${ct.description ? `<span style="font-weight:400;text-transform:none;letter-spacing:0;opacity:0.7;max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(ct.description)}</span>` : ''}
+      </div>`;
+    }
+
+    function renderStepCard(st, idx, idPrefix) {
+      const pfx = idPrefix || '';
+      const cls = statusClass(st.status);
+      const inv = st.invocations || [];
+      const msgs = inv.reduce((s, v) => s + (v.message_count || 0), 0);
+      const tools = inv.reduce((s, v) => s + (v.tool_call_count || 0), 0);
+      const allFiles = [...new Set(inv.flatMap(v => v.modified_files || []))];
+
+      const lastInv = inv[inv.length - 1];
+      let gateSummary = '';
+      if (lastInv && lastInv.gate) {
+        const g = lastInv.gate;
+        gateSummary = g.passed
+          ? `<span class="gate-pass">&#10003; ${esc(g.type || 'gate')}</span>`
+          : `<span class="gate-fail">&#10007; ${esc(g.type || 'gate')}</span>`;
+      }
+
+      const branchCount = inv.filter(v => v.retry_type === 'branch').length;
+      const totalBranches = branchCount > 0 ? branchCount + 1 : 0;
+      const branchStr = totalBranches > 0
+        ? `<span class="retry-badge branch-badge">${totalBranches} branches</span>` : '';
+      const retryStr = st.retry_count > 0
+        ? `<span>${st.retry_count} retr${st.retry_count !== 1 ? 'ies' : 'y'}</span>` : '';
+
+      // Extract model(s) from invocations for step header
+      const models = [...new Set(inv.map(v => v.model).filter(Boolean))];
+      const modelStr = models.length ? `<span class="step-model">${esc(models.join(', '))}</span>` : '';
+
+      const cfg = st.config || {};
+      const isInline = cfg.subagent === false;
+      const inlineBadge = isInline ? '<span class="tool-call-source tool-call-source-mcp" style="font-size:9px;margin-left:4px" title="Executed by orchestrator (no subagent spawn)">orchestrator</span>' : '';
+
+      // Count tool calls for this step (for inline steps that have no invocations)
+      const stepToolCalls = (trace.tool_calls || []).filter(tc => tc.step === st.name);
+      const toolCallCount = stepToolCalls.length;
+
+      // Phase 61: planning-step visual + stats badge
+      const isPlanning = !!st.planning;
+      const planningCardClass = isPlanning ? ' step-card-planning' : '';
+      let planningBadge = '';
+      if (isPlanning) {
+        const phase = st.planning.phase || 'planning';
+        const attempts = st.planning.attempts != null ? st.planning.attempts : 0;
+        planningBadge = `<span class="planning-phase-pill ${esc(phase)}" title="Planning step phase: ${esc(phase)} · ${attempts} validate attempt${attempts !== 1 ? 's' : ''}">planning · ${attempts} attempt${attempts !== 1 ? 's' : ''} · ${esc(phase)}</span>`;
+      }
+
+      // Delegation step visual (amber card + chip)
+      const isDelegation = !!st.delegate_to;
+      const delegationCardClass = isDelegation ? ' step-card-delegation' : '';
+      let delegationBadge = '';
+      if (isDelegation) {
+        delegationBadge = `<span class="delegate-pill" title="Delegates to workflow: ${esc(st.delegate_to)}">&#8594; delegate: ${esc(st.delegate_to)}</span>`;
+      }
+
+      // Run-inbox dialog: a pending question for THIS step surfaces right on
+      // the card (the run is holding for the user's answer).
+      const inboxPendingMsg = stepInboxPending(st.name);
+      // Covers the window BEFORE the question is posted. The hook parks a
+      // human-gated step as awaiting_human once its structural gate passes —
+      // the card must say "sign-off still owed", not COMPLETED (the live lie)
+      // and not a bare IN PROGRESS that looks like the agent is working.
+      const awaitingSignoff =
+        !inboxPendingMsg && st.awaiting_human === true && st.status === 'in_progress';
+      const inboxBadge = inboxPendingMsg
+        ? '<span class="inbox-await-pill" title="This step is waiting for your answer in the run inbox">&#9993; awaiting your answer</span>'
+        : awaitingSignoff
+          ? '<span class="inbox-await-pill" title="Gates passed; completion still needs your recorded answer — the question is on its way">&#9993; sign-off pending</span>'
+          : '';
+      const inboxCardClass = inboxPendingMsg || awaitingSignoff ? ' step-card-inbox-waiting' : '';
+
+      const pendingClass = (st.status === 'pending') ? ' step-card-pending' : '';
+      return `<div class="step-card${planningCardClass}${delegationCardClass}${pendingClass}${inboxCardClass}" id="step-${pfx}${idx}">
+        <div class="step-header" onclick="toggleStep('${pfx}${idx}')">
+          ${chevronSVG}
+          <span class="step-index ${cls}">${idx + 1}</span>
+          <span class="step-name">${esc(st.name)}</span>${inlineBadge}
+          ${modelStr}
+          <div class="step-stats">
+            ${inboxBadge}
+            ${planningBadge}
+            ${delegationBadge}
+            <span>${fmtDuration(st.duration_ms)}</span>
+            <span>${msgs} msg</span>
+            <span>${tools + toolCallCount} tools</span>
+            ${branchStr}
+            ${retryStr}
+            ${gateSummary}
+            ${(st.tool_warnings && st.tool_warnings.length) ? `<span style="color:var(--amber)" title="${st.tool_warnings.length} tool warning(s)">&#9888;</span>` : ''}
+            <span class="pill pill-${cls}">${esc(st.status || 'pending')}${liveSpin(st.status)}</span>
+          </div>
+        </div>
+        <div class="step-details">
+          ${renderInboxDialog(st)}
+          ${renderStepConfig(st.config, st)}
+          ${st.goal ? renderGoal(st.goal) : ''}
+          ${renderPlanningPanel(st)}
+          ${renderDelegationPanel(st)}
+          ${renderStepInputs(st)}
+          ${renderStepTiming(st, inv)}
+          ${renderSubagentTimeline(st, idx)}
+          ${renderInvocations(inv, st.prompt_files)}
+          ${renderLedgerSubagents(st)}
+          ${renderToolWarnings(st)}
+          ${renderStepToolCalls(st, idx)}
+          ${renderModifiedFiles(allFiles)}
+          ${renderStepOutputs(st)}
+          ${st.summary ? `<div class="detail-block"><div class="detail-label">Summary</div><div class="summary-text">${esc(st.summary)}</div></div>` : ''}
+        </div>
+      </div>`;
+    }
+
+    // ── Run-inbox dialog on a step card ───────────────────────────────────
+    // Pending question → the answer controls (accept/reject/choices/free
+    // text), POSTing to the Local API with the serve token. Answered → the
+    // compact durable record (who/what/when/via). Nothing when the step has
+    // no inbox traffic or the trace is not served.
+    function renderInboxDialog(st) {
+      if (!inboxCtx) return '';
+      const pending = stepInboxPending(st.name);
+      const answered = pending ? null : stepInboxAnswered(st.name);
+      if (!pending && !answered) return '';
+      const m = pending || answered;
+      const req = m.request
+        ? `${m.request.action}${m.request.args && Object.keys(m.request.args).length ? '\n' + JSON.stringify(m.request.args, null, 2) : ''}` : '';
+      const grouped = Array.isArray(m.items) && m.items.length > 0;
+      let inner =
+        `<div class="inbox-dlg-kind">${esc((m.kind || 'human_gate').replace('_', ' '))}</div>` +
+        `<div class="inbox-dlg-title">${esc(m.title)}</div>` +
+        (m.body ? `<div class="inbox-dlg-body">${esc(m.body)}</div>` : '') +
+        (req ? `<pre class="inbox-dlg-req">${esc(req)}</pre>` : '');
+      if (grouped) {
+        inner += m.items.map(it => ivItemBlock(m, it, !!pending)).join('');
+        if (pending) {
+          inner += `<div class="inbox-dlg-actions"><button class="inbox-btn send" onclick="ivSendItems('${esc(m.message_id)}')">${m.items.length === 1 ? 'Send answer' : 'Send all ' + m.items.length + ' answers'}</button></div>`;
+        } else {
+          const r = answered.response;
+          inner += `<div class="inbox-dlg-answered">Answered · via ${esc(r.via)} · ${esc((r.responded_at || '').replace('T', ' ').slice(0, 16))}</div>`;
+        }
+        return `<div class="detail-block inbox-dlg${pending ? ' waiting' : ''}" onclick="event.stopPropagation()">${inner}</div>`;
+      }
+      if (pending) {
+        const o = m.options || {};
+        const d = _ivDraft[m.message_id] || (_ivDraft[m.message_id] = { choice: null, text: '' });
+        const choices = (m.request && Array.isArray(m.request.choices) && m.request.choices.length) ? m.request.choices : null;
+        // Free text (respond) is its own kind — it coexists with offered choices.
+        const respondAllowed = o.respond === true;
+        let controls = '';
+        if (o.accept || o.reject) {
+          controls += '<div class="inbox-dlg-actions">';
+          if (o.accept) controls += `<button class="inbox-btn accept" title="Approve — answers immediately" onclick="ivRespond('${esc(m.message_id)}','accept')">Accept</button>`;
+          if (o.reject) controls += `<button class="inbox-btn reject" title="Refuse — the step is re-run with your feedback" onclick="ivRespond('${esc(m.message_id)}','reject')">Reject</button>`;
+          controls += '</div>';
+        }
+        // Clicking a choice ANSWERS immediately (type 'choice') — no Send step.
+        if (choices) {
+          const sugg = m.request.recommended;
+          controls += `<div class="inbox-choicecap">Pick one — answers immediately</div><div class="inbox-choicelist">`;
+          for (const c of choices) controls += `<button class="inbox-choice" onclick="ivChoiceSend('${esc(m.message_id)}','${esc(c)}')">${esc(c)}${c === sugg ? '<span class="rec">recommended</span>' : ''}</button>`;
+          controls += '</div>';
+        }
+        // Free text and/or edited args — valid alongside the choices above.
+        if (respondAllowed || o.edit) {
+          controls += `<textarea class="inbox-dlg-text" placeholder="Your answer…" oninput="ivText('${esc(m.message_id)}', this.value)">${esc(d.text)}</textarea>`;
+          controls += `<div class="inbox-dlg-actions"><button class="inbox-btn send" title="Send your written answer" onclick="ivRespond('${esc(m.message_id)}','${respondAllowed ? 'respond' : 'edit'}')">Send</button></div>`;
+        }
+        inner += controls;
+      } else {
+        const r = answered.response;
+        inner += `<div class="inbox-dlg-answered">Answered · <b>${esc(r.type)}</b> via ${esc(r.via)} · ${esc((r.responded_at || '').replace('T', ' ').slice(0, 16))}${r.text ? ` — <span class="inbox-dlg-anstext">${esc(r.text)}</span>` : ''}</div>`;
+      }
+      return `<div class="detail-block inbox-dlg${pending ? ' waiting' : ''}" onclick="event.stopPropagation()">${inner}</div>`;
+    }
+    function ivChoiceSend(id, c) { const d = _ivDraft[id] || (_ivDraft[id] = { choice: null, text: '' }); d.choice = c; void ivRespond(id, 'choice'); }
+    function ivText(id, v) { const d = _ivDraft[id] || (_ivDraft[id] = { choice: null, text: '' }); d.text = v; }
+    async function ivRespond(messageId, type) {
+      if (!inboxCtx) return;
+      const d = _ivDraft[messageId] || { choice: null, text: '' };
+      const m = inboxMsgs.find(x => x.message_id === messageId);
+      const choices = m && m.request && Array.isArray(m.request.choices) ? m.request.choices : null;
+      const body = { run: inboxCtx.runId, message_id: messageId, type };
+      if (type === 'choice') {
+        if (!d.choice) { showToast('Pick one of the offered choices first', 'info'); return; }
+        if (!choices || choices.indexOf(d.choice) < 0) { showToast('That entry is not one of the offered choices', 'info'); return; }
+        body.text = d.choice;
+      } else if (type === 'respond' || type === 'edit') {
+        const t = (d.text || '').trim();
+        if (!t) { showToast('Write the answer first', 'info'); return; }
+        if (type === 'edit') {
+          let parsed = null; try { parsed = JSON.parse(t); } catch (e) {}
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) body.args = parsed; else body.text = t;
+        } else body.text = t;
+      }
+      const headers = { 'Content-Type': 'application/json' };
+      if (inboxCtx.token) headers['X-Riglane-Token'] = inboxCtx.token;
+      try {
+        const r = await fetch(inboxCtx.base + '/api/inbox/respond', { method: 'POST', headers, body: JSON.stringify(body) });
+        let j = {}; try { j = await r.json(); } catch (e) {}
+        if (r.ok && j.ok) { showToast('Response recorded — the run continues', 'info'); delete _ivDraft[messageId]; _inboxSig = ''; void pollInbox(); }
+        else if (r.status === 403) showToast('The page was opened without its access token - re-open the studio from the URL riglane serve (or the run auto-open) printed, then answer again', 'info');
+        else showToast('Respond failed: ' + (j.error || ('HTTP ' + r.status)), 'info');
+      } catch (e) { showToast('Respond failed: ' + (e && e.message ? e.message : String(e)), 'info'); }
+    }
+
+    /* One question of a grouped inbox message (controls mark a selection;
+       "Send all answers" posts the whole exchange at once). */
+    function ivItemBlock(m, it, pending) {
+      const o = it.options || {};
+      const choices = (it.request && Array.isArray(it.request.choices)) ? it.request.choices : null;
+      // Free text (respond) is its own kind — it coexists with offered choices.
+      const canText = o.respond === true || o.edit === true;
+      const d = ivItemDraft(m.message_id, it.id);
+      const rec = m.response && m.response.items ? m.response.items[it.id] : null;
+      let h = `<div class="inbox-item"><div class="inbox-item-t">${esc(it.title)}</div>`;
+      if (it.body) h += `<div class="inbox-dlg-body">${esc(it.body)}</div>`;
+      if (rec) {
+        h += `<div class="inbox-dlg-answered"><b>${esc(rec.type)}</b>${rec.text ? `: ${esc(rec.text)}` : ''}${rec.args ? ` <span style="font-family:var(--mono);font-size:11px">${esc(JSON.stringify(rec.args))}</span>` : ''}</div>`;
+        return h + '</div>';
+      }
+      if (!pending) return h + '</div>';
+      if (o.accept || o.reject) {
+        h += '<div class="inbox-dlg-actions" style="margin-top:6px">';
+        if (o.accept) h += `<button class="inbox-btn accept${d.type === 'accept' ? ' sel' : ''}" title="Approve (marks the answer; Send all below submits)" onclick="ivItemPick('${esc(m.message_id)}','${esc(it.id)}','accept')">Accept</button>`;
+        if (o.reject) h += `<button class="inbox-btn reject${d.type === 'reject' ? ' sel' : ''}" title="Refuse (marks the answer; Send all below submits)" onclick="ivItemPick('${esc(m.message_id)}','${esc(it.id)}','reject')">Reject</button>`;
+        h += '</div>';
+      }
+      if (choices) {
+        const sugg = it.request.recommended;
+        h += `<div class="inbox-choicecap">Pick one</div><div class="inbox-choicelist">`;
+        for (const c of choices) h += `<button class="inbox-choice${d.choice === c ? ' sel' : ''}" onclick="ivItemChoice('${esc(m.message_id)}','${esc(it.id)}','${esc(c)}')">${esc(c)}${c === sugg ? '<span class="rec">recommended</span>' : ''}</button>`;
+        h += '</div>';
+      }
+      if (canText) h += `<textarea class="inbox-dlg-text" placeholder="Your answer…" oninput="ivItemText('${esc(m.message_id)}','${esc(it.id)}', this.value)">${esc(d.text || '')}</textarea>`;
+      return h + '</div>';
+    }
+    function ivItemDraft(msgId, itemId) {
+      const d = _ivDraft[msgId] || (_ivDraft[msgId] = { choice: null, text: '', items: {} });
+      if (!d.items) d.items = {};
+      return d.items[itemId] || (d.items[itemId] = { type: null, choice: null, text: '' });
+    }
+    function ivItemPick(msgId, itemId, type) {
+      const it = ivItemDraft(msgId, itemId);
+      it.type = it.type === type ? null : type; it.choice = null;
+      render();
+    }
+    function ivItemChoice(msgId, itemId, c) {
+      const it = ivItemDraft(msgId, itemId);
+      it.choice = it.choice === c ? null : c; it.type = null;
+      render();
+    }
+    function ivItemText(msgId, itemId, v) { ivItemDraft(msgId, itemId).text = v; }
+    async function ivSendItems(messageId) {
+      if (!inboxCtx) return;
+      const m = inboxMsgs.find(x => x.message_id === messageId);
+      if (!m || !Array.isArray(m.items)) return;
+      const answers = {};
+      for (const it of m.items) {
+        const o = it.options || {};
+        const choices = (it.request && Array.isArray(it.request.choices)) ? it.request.choices : null;
+        const d = ivItemDraft(messageId, it.id);
+        if (d.type === 'accept' || d.type === 'reject') { answers[it.id] = { type: d.type }; continue; }
+        if (choices && d.choice) { answers[it.id] = { type: 'choice', text: d.choice }; continue; }
+        const t = (d.text || '').trim();
+        if (t && (o.respond || o.edit)) {
+          if (o.edit && !o.respond) {
+            let parsed = null; try { parsed = JSON.parse(t); } catch (e) {}
+            answers[it.id] = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+              ? { type: 'edit', args: parsed } : { type: 'edit', text: t };
+          } else answers[it.id] = { type: 'respond', text: t };
+          continue;
+        }
+        showToast('Answer "' + it.title + '" first — a grouped message is sent in full', 'info');
+        return;
+      }
+      const headers = { 'Content-Type': 'application/json' };
+      if (inboxCtx.token) headers['X-Riglane-Token'] = inboxCtx.token;
+      try {
+        const r = await fetch(inboxCtx.base + '/api/inbox/respond', {
+          method: 'POST', headers,
+          body: JSON.stringify({ run: inboxCtx.runId, message_id: messageId, type: 'items', items: answers }),
+        });
+        let j = {}; try { j = await r.json(); } catch (e) {}
+        if (r.ok && j.ok) { showToast('Answers recorded — the run continues', 'info'); delete _ivDraft[messageId]; _inboxSig = ''; void pollInbox(); }
+        else if (r.status === 403) showToast('The page was opened without its access token - re-open from the URL riglane serve (or the run auto-open) printed, then answer again', 'info');
+        else showToast('Respond failed: ' + (j.error || ('HTTP ' + r.status)), 'info');
+      } catch (e) { showToast('Respond failed: ' + (e && e.message ? e.message : String(e)), 'info'); }
+    }
+
+    // Phase 61 Slice U3: planning-step panel inside step details. Shows
+    // planning state (phase, child_run_id, child_workflow_path link) and a
+    // chronological list of workflow_validate_dynamic attempts filtered from
+    // trace.mcp_calls (which were tagged with parent_workflow/parent_step by
+    // Slice U1a). Each attempt entry surfaces the summary text (which Slice
+    // U1b extended to include error count + first error for failed validates).
+    function renderPlanningPanel(st) {
+      if (!st.planning) return '';
+      const p = st.planning;
+      const phase = p.phase || 'planning';
+      const childRun = p.child_run_id ? `<span style="font-family:var(--mono);font-size:11px">child run: ${esc(p.child_run_id)}</span>` : '';
+      const childPath = p.child_workflow_path ? `<span style="font-family:var(--mono);font-size:11px;color:var(--text-muted);word-break:break-all">${esc(p.child_workflow_path)}</span>` : '';
+      const childTrace = st.child_trace_path ? `<div style="margin-top:6px"><span style="font-size:11px;color:var(--text-muted)">child trace:</span> <span style="font-family:var(--mono);font-size:11px;word-break:break-all">${esc(st.child_trace_path)}</span></div>` : '';
+
+      // Filter validate_dynamic calls for THIS step (chronological order
+      // preserved by trace.mcp_calls insertion order).
+      const allCalls = trace.mcp_calls || [];
+      const validateCalls = allCalls.filter(c => c.tool === 'workflow_validate_dynamic' && c.step === st.name);
+      const invokeCalls = allCalls.filter(c => c.tool === 'workflow_invoke_dynamic' && c.step === st.name);
+      const finalizeCalls = allCalls.filter(c => c.tool === 'workflow_finalize_dynamic' && c.step === st.name);
+
+      let attemptsList = '';
+      if (validateCalls.length > 0) {
+        attemptsList = `<div class="planning-attempts">${validateCalls.map((c, i) => {
+          const ok = c.success === true && !/errors:|Validate failed|Planning blocked/.test(c.summary || '');
+          const okIcon = ok ? '<span class="planning-attempt-ok" title="validation passed">&#10003;</span>' : '<span class="planning-attempt-fail" title="validation failed">&#10007;</span>';
+          const ts = c.timestamp ? new Date(c.timestamp).toISOString().slice(11, 19) : '';
+          return `<div class="planning-attempt">
+            <span class="planning-attempt-num">#${i + 1}</span>
+            <span class="planning-attempt-ts">${esc(ts)}</span>
+            ${okIcon}
+            <span class="planning-attempt-summary">${esc(c.summary || '(no summary)')}</span>
+          </div>`;
+        }).join('')}</div>`;
+      } else {
+        attemptsList = `<div style="font-size:11px;color:var(--text-muted);font-style:italic">No workflow_validate_dynamic calls recorded for this step.</div>`;
+      }
+
+      const invokeRow = invokeCalls.length > 0
+        ? `<div style="margin-top:8px;font-size:12px;color:var(--text-secondary)">Invoke: ${esc(invokeCalls[invokeCalls.length - 1].summary || '?')}</div>`
+        : '';
+      const finalizeRow = finalizeCalls.length > 0
+        ? `<div style="margin-top:4px;font-size:12px;color:var(--text-secondary)">Finalize: ${esc(finalizeCalls[finalizeCalls.length - 1].summary || '?')}</div>`
+        : '';
+
+      // Child trace rendering moved to renderSteps() as indented group below
+      // the parent step card. No inline rendering in planning panel anymore.
+      let childLoader = '';
+
+      return `<div class="planning-panel">
+        <div class="planning-header">
+          <span>Planning Step</span>
+          <span class="planning-phase-pill ${esc(phase)}">${esc(phase)}</span>
+          ${childRun}
+        </div>
+        ${childPath ? `<div style="margin-bottom:4px">${childPath}</div>` : ''}
+        ${childTrace}
+        <div style="margin-top:10px;font-size:11px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em;font-weight:600">Validation attempts (${validateCalls.length})</div>
+        ${attemptsList}
+        ${invokeRow}
+        ${finalizeRow}
+        ${childLoader}
+      </div>`;
+    }
+
+    // Delegation step panel: shows target workflow, status, and child trace
+    // loader. Reuses the same loadChildTrace() as planning (Slice U4).
+    function renderDelegationPanel(st) {
+      if (!st.delegate_to) return '';
+      const status = esc(st.status || 'unknown');
+      const sc = st.status === 'completed' ? 'planning-phase-pill completed'
+        : st.status === 'failed' ? 'planning-phase-pill failed'
+        : 'planning-phase-pill executing';
+      // Child trace rendering moved to renderSteps() as indented group.
+      // The delegation linkage stamp names the exact child run.
+      const childRunId = st.delegation && st.delegation.child_run_id ? st.delegation.child_run_id : null;
+      const childRunLine = childRunId
+        ? `<div style="font-size:12px;margin-top:4px">Child run: <span style="font-family:var(--mono)" data-tip="The exact child run this step is linked to (stamped by the child's workflow_init). param_bindings and from_delegated artifacts resolve against THIS run, never 'latest by name'.">${esc(childRunId)}</span></div>`
+        : '';
+      return `<div class="delegation-panel">
+        <div class="delegation-header">
+          <span>Delegation</span>
+          <span class="${sc}">${status}</span>
+        </div>
+        <div style="font-size:12px">Delegates to: <span style="font-family:var(--mono);font-weight:600">${esc(st.delegate_to)}</span></div>
+        ${childRunLine}
+      </div>`;
+    }
+
+    // Slice U4: async-load child trace + render inline. Reuses the standard
+    // renderSteps/renderStepCard machinery by temporarily swapping the
+    // module-level `trace` variable to the child trace context. Restores on
+    // completion (try/finally) so subsequent parent-level operations see
+    // the original trace.
+    //
+    // Failure path: fetch() fails on file:// URLs in some browsers (Firefox
+    // by default), or when child_trace_path is wrong. Fall back to a manual
+    // file picker via FileReader so the user can still see the child run.
+    async function loadChildTrace(stepName, path, btnEl) {
+      const containerEl = document.getElementById('child-trace-' + stepName);
+      if (!containerEl) return;
+      containerEl.innerHTML = '<div class="child-trace-loading">Loading child trace…</div>';
+      if (btnEl) btnEl.disabled = true;
+      let childTrace = null;
+      try {
+        const resp = await fetch(path);
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        childTrace = await resp.json();
+      } catch (e) {
+        renderChildTraceFallback(containerEl, path, e && e.message ? e.message : String(e));
+        if (btnEl) btnEl.disabled = false;
+        return;
+      }
+      renderChildTraceInto(containerEl, childTrace);
+      if (btnEl) {
+        btnEl.textContent = 'Reload';
+        btnEl.disabled = false;
+      }
+    }
+
+    /** Render a loaded child trace into the target container by temporarily
+     *  swapping the module-level `trace` global. */
+    function renderChildTraceInto(containerEl, childTrace) {
+      const savedTrace = trace;
+      try {
+        trace = childTrace;
+        const stepsHtml = (childTrace.steps || []).map((st, i) => renderStepCard(st, i)).join('');
+        const wfHeader = childTrace.workflow
+          ? `<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;font-family:var(--mono)">workflow: ${esc(childTrace.workflow)} · status: ${esc(childTrace.status || '?')} · ${(childTrace.steps || []).length} step(s)</div>`
+          : '';
+        containerEl.innerHTML = wfHeader + stepsHtml;
+      } finally {
+        trace = savedTrace;
+      }
+    }
+
+    /** Show file-picker fallback when fetch() fails (file:// CORS etc). */
+    function renderChildTraceFallback(containerEl, path, errMsg) {
+      const safePath = esc(path);
+      const safeErr = esc(errMsg);
+      containerEl.innerHTML = `
+        <div class="child-trace-error">Could not fetch <code>${safePath}</code>: ${safeErr}</div>
+        <div class="child-trace-fallback">
+          File:// URLs may block fetch in some browsers. Select the child trace JSON manually:
+          <br>
+          <input type="file" accept=".json,application/json" onchange="loadChildTraceFromFile(this)" data-target="${containerEl.id}">
+        </div>`;
+    }
+
+    /** Handler for manual file-picker fallback. */
+    function loadChildTraceFromFile(inputEl) {
+      const file = inputEl.files && inputEl.files[0];
+      if (!file) return;
+      const targetId = inputEl.dataset.target;
+      const containerEl = document.getElementById(targetId);
+      if (!containerEl) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const childTrace = JSON.parse(e.target.result);
+          renderChildTraceInto(containerEl, childTrace);
+        } catch (err) {
+          containerEl.innerHTML = `<div class="child-trace-error">Failed to parse JSON: ${esc(err.message || String(err))}</div>`;
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    function renderGoal(goal) {
+      return `<div class="detail-block">
+        <div class="detail-label">Goal <span style="font-size:10px;opacity:0.5;text-transform:none;letter-spacing:0;font-weight:400">(from workflow.yaml)</span></div>
+        <div class="goal-text">${esc(goal)}</div>
+      </div>`;
+    }
+
+    function renderStepConfig(cfg, st) {
+      if (!cfg) return '';
+      const chips = [];
+      const isPlanning = st && !!st.planning;
+      const specOn = cfg.spec_check === true;
+      const specAuthoring = cfg.spec_authoring === 'persist' || cfg.spec_authoring === 'validate' ? cfg.spec_authoring : '';
+      const stepTips = {
+        spec_check: 'Spec CONSUMPTION — the step must RESPECT the behavioral specs (opt-in).\n\nWhen ON, the engine:\n• whitelists spec_search + spec_link for the subagent (Claude Code);\n• injects guidance at step start — find the specs for the AREA being changed, honor Rule Statements, STOP on conflict, keep registry links updated;\n• adds a spec-compliance clause to the semantic gate.\n\nOFF = read-only step (analysis / reporting / audit).',
+        spec_authoring_persist: 'Spec AUTHORING — persist: this step WRITES specs via spec_write.\n\nThe engine:\n• whitelists spec_write + spec_search + spec_link (Claude Code);\n• injects authoring guidance (target scope, existing domains, format);\n• AUTO-declares the .riglane/specs outputs shown on this card (write_proof: any_member) — they are not in the YAML.',
+        spec_authoring_validate: 'Spec AUTHORING — validate: DRY-RUN preview, persists NOTHING.\n\nThe engine:\n• whitelists spec_write + spec_search + spec_link (Claude Code);\n• injects authoring guidance;\n• accepts spec_write ONLY with dry_run:true — a persisting call during this step is physically REJECTED.\n\nThe step declares its own report output (not .riglane/specs). Typical: a review step before the persist/commit step.',
+        subagent: 'When ON, step spawns an isolated subagent with fresh context. When OFF, step executes directly in the orchestrator session.',
+      };
+      chips.push(`<span class="step-chip ${specOn ? 'step-chip-on' : 'step-chip-off'}" data-tip="${esc(stepTips.spec_check)}"><span class="step-chip-dot"></span><span class="step-chip-key">spec_check</span></span>`);
+      // spec_authoring chip — shown only when the flag is set (absent = off).
+      if (specAuthoring) {
+        const saTip = specAuthoring === 'persist' ? stepTips.spec_authoring_persist : stepTips.spec_authoring_validate;
+        chips.push(`<span class="step-chip step-chip-on" data-tip="${esc(saTip)}"><span class="step-chip-dot"></span><span class="step-chip-key">spec_authoring: ${specAuthoring}</span></span>`);
+      }
+      // Hide subagent chip for planning steps — they are always orchestrator-driven.
+      if (!isPlanning) {
+        chips.push(`<span class="step-chip ${cfg.subagent ? 'step-chip-on' : 'step-chip-off'}" data-tip="${esc(stepTips.subagent)}"><span class="step-chip-dot"></span><span class="step-chip-key">subagent</span></span>`);
+      }
+
+      // Show effective gate config: merge workflow-level defaults with step overrides.
+      // Planning steps take no step-level gate (no-op) — show a note instead of
+      // misleading gate chips. The workflow gate applies to the generated substeps
+      // (inherited); per-substep gates are set in the drafted child workflow.
+      const wfGate = trace.gate_config || {};
+      const stepGate = cfg.gate || {};
+      const hasOverride = cfg.gate && Object.keys(cfg.gate).length > 0;
+      if (isPlanning) {
+        chips.push(`<span class="step-chip step-chip-off" data-tip="Planning steps take no step-level gate — structural has no outputs to validate and semantic/human are not evaluated at the planning step. The workflow-level gate applies to the generated substeps (inherited); per-substep gates are set in the drafted workflow."><span class="step-chip-dot"></span><span class="step-chip-key">gates: on substeps</span></span>`);
+      } else {
+        ['structural', 'semantic', 'human'].forEach(name => {
+          const isOverride = stepGate[name] != null;
+          const effective = isOverride ? stepGate[name] : (wfGate[name] ?? false);
+          const source = isOverride ? ' (step override)' : ' (from workflow)';
+          const tip = {
+            structural: 'Validate outputs against struct schemas: file existence, field types, required fields, patterns.' + source,
+            semantic: 'LLM evaluates output completeness, correctness and coherence.' + source,
+            human: 'Require explicit user approval before proceeding.' + source,
+          }[name];
+          const overrideMark = isOverride ? ' style="outline:1px dashed var(--accent);outline-offset:1px"' : '';
+          chips.push(`<span class="step-chip ${effective ? 'step-chip-on' : 'step-chip-off'}"${overrideMark} data-tip="${esc(tip)}"><span class="step-chip-dot"></span><span class="step-chip-key">gate.${name}</span></span>`);
+        });
+      }
+
+      // allow_partial_step_complete chip — shown when set explicitly at workflow
+      // OR step level (only meaningful for parallel steps; the chip tells the
+      // viewer how this step would resolve a partial-failure condition).
+      const apscOverride = stepGate.allow_partial_step_complete != null;
+      const apscWfSet = wfGate.allow_partial_step_complete === true;
+      if (apscOverride || apscWfSet) {
+        const apscEffective = apscOverride ? stepGate.allow_partial_step_complete : (wfGate.allow_partial_step_complete ?? false);
+        const apscTip = (apscOverride ? '(step override) ' : '(from workflow) ')
+          + 'Effective allow_partial_step_complete for this step. When false, the engine refuses to advance from a parallel step with any failed branch. When true, partial completion is permitted (but only if at least one branch succeeded — catastrophic failure always halts).';
+        const apscMark = apscOverride ? ' style="outline:1px dashed var(--accent);outline-offset:1px"' : '';
+        chips.push(`<span class="step-chip ${apscEffective ? 'step-chip-on' : 'step-chip-off'}"${apscMark} data-tip="${esc(apscTip)}"><span class="step-chip-dot"></span><span class="step-chip-key">gate.allow_partial_step_complete</span></span>`);
+      }
+
+      return `<div class="detail-block"><div class="detail-label">Step Config${hasOverride ? ' <span style="font-size:9px;opacity:0.5;font-weight:400">(dashed = step override)</span>' : ''}</div><div class="step-config-chips">${chips.join('')}</div></div>`;
+    }
+
+    function renderStepTiming(st, invocations) {
+      const bc = (invocations || []).filter(v => v.retry_type === 'branch').length;
+      const tb = bc > 0 ? bc + 1 : 0;
+      return `<div class="detail-block">
+        <div class="detail-label">Timing</div>
+        <div class="timing-row">
+          <span>Started: <strong>${fmtTime(st.started_at)}</strong></span>
+          <span>Completed: <strong>${fmtTime(st.completed_at)}</strong></span>
+          <span>Duration: <strong>${fmtDuration(st.duration_ms)}</strong></span>
+          ${tb > 0 ? `<span>Branches: <strong>${tb}</strong></span>` : ''}
+          <span>Retries: <strong>${st.retry_count || 0}</strong></span>
+        </div>
+      </div>`;
+    }
+
+    function renderGateDetails(invocations) {
+      if (!invocations.length) return '';
+      const rows = invocations.map(inv => {
+        const g = inv.gate;
+        if (!g) return '';
+        const icon = g.passed
+          ? `<span class="gate-icon gate-pass">&#10003;</span>`
+          : `<span class="gate-icon gate-fail">&#10007;</span>`;
+        let detail = `${g.checks || 0} checks, ${g.failures || 0} failures`;
+        if (g.details && g.details.length) {
+          detail += ' &mdash; ' + g.details.slice(0, 3).map(d => esc(String(d))).join('; ');
+          if (g.details.length > 3) detail += ` (+${g.details.length - 3} more)`;
+        }
+        return `<div class="gate-row">
+          ${icon}
+          <span>${esc(g.type || 'structural')}</span>
+          <span class="gate-info">${invocations.length > 1 ? `[iter ${inv.iteration}] ` : ''}${detail}</span>
+        </div>`;
+      }).filter(Boolean).join('');
+      if (!rows) return '';
+      return `<div class="detail-block"><div class="detail-label">Gate Results</div>${rows}</div>`;
+    }
+
+    function groupInvocations(invocations) {
+      // Group invocations by subagent session.
+      // Strategy 1 (preferred): group by subagent_id when available
+      // Strategy 2 (fallback): infer from retry_type sequence
+      const hasIds = invocations.some(inv => inv.subagent_id);
+      if (hasIds) {
+        // Group by subagent_id — accurate even with parallel interleaving
+        const idMap = new Map();
+        const order = [];
+        for (const inv of invocations) {
+          const id = inv.subagent_id || `_anon_${order.length}`;
+          if (!idMap.has(id)) {
+            const g = { primary: inv, retries: [] };
+            idMap.set(id, g);
+            order.push(g);
+          } else {
+            idMap.get(id).retries.push(inv);
+          }
+        }
+        return order;
+      }
+      // Fallback: sequential heuristic (gate retries → preceding non-gate)
+      // Note: may misattribute retries when parallel subagents interleave
+      const groups = [];
+      let current = null;
+      for (const inv of invocations) {
+        const isGateRetry = inv.retry_type === 'gate';
+        if (isGateRetry && current) {
+          current.retries.push(inv);
+        } else {
+          current = { primary: inv, retries: [] };
+          groups.push(current);
+        }
+      }
+      return groups;
+    }
+
+    function extractTaskHint(inv) {
+      // Try to extract a short description of what this subagent does
+      // Priority: description field > parallel_key > first line pattern from task_prompt
+      if (inv.description) return inv.description;
+      if (inv.parallel_key) return inv.parallel_key;
+      const tp = inv.task_prompt || '';
+      // Pattern: "for the **domain** domain"
+      const domainMatch = tp.match(/for the \*\*([^*]+)\*\* domain/);
+      if (domainMatch) return domainMatch[1];
+      // Pattern: "Step N (NAME)"
+      const stepMatch = tp.match(/Step \d+ \(([^)]+)\)/);
+      if (stepMatch) return stepMatch[1].toLowerCase();
+      // Very short prompt = likely phantom/test
+      if (tp.length < 20) return tp || null;
+      return null;
+    }
+
+    function renderSubagentTimeline(st, idx) {
+      const invocations = st.invocations || [];
+      if (!invocations.length) return '';
+      const groups = groupInvocations(invocations);
+      const totalInvocations = groups.reduce((s, g) => s + 1 + g.retries.length, 0);
+
+      const stepStart = new Date(st.started_at).getTime();
+      const stepEnd   = new Date(st.completed_at).getTime();
+      const stepSpan  = stepEnd - stepStart;
+      if (stepSpan <= 0) return '';
+
+      // Compute bar data per subagent group
+      const bars = groups.map((g, gi) => {
+        const inv = g.primary;
+        const lastInv = g.retries.length ? g.retries[g.retries.length - 1] : inv;
+        const finalPassed = lastInv.gate ? lastInv.gate.passed : true;
+        const hasRetries = g.retries.length > 0;
+
+        // Detect phantom invocations (zero duration, toolu_/test- prefix ids)
+        const isPhantom = !inv.duration_ms || inv.duration_ms === 0;
+
+        // Start = completed_at - duration_ms (duration is cumulative from session start)
+        let subStartMs = stepStart;
+        let subEndMs   = stepEnd;
+        if (inv.completed_at && inv.duration_ms) {
+          subStartMs = new Date(inv.completed_at).getTime() - inv.duration_ms;
+        } else if (inv.completed_at) {
+          subStartMs = new Date(inv.completed_at).getTime();
+          subEndMs = subStartMs; // phantom: point in time
+        }
+        if (lastInv.completed_at) {
+          subEndMs = new Date(lastInv.completed_at).getTime();
+        }
+        // Clamp to step range
+        subStartMs = Math.max(subStartMs, stepStart);
+        subEndMs   = Math.min(subEndMs, stepEnd);
+
+        const hint = extractTaskHint(inv) || `#${gi + 1}`;
+        const durationLabel = isPhantom ? '' : fmtDuration(subEndMs - subStartMs);
+
+        return { subStartMs, subEndMs, hint, durationLabel, finalPassed, hasRetries, retries: g.retries, inv, isPhantom, groupIndex: gi };
+      });
+
+      // Hosts whose hook payload carries no duration metric (e.g. Gemini's
+      // AfterTool envelope) leave EVERY invocation phantom — completed_at is
+      // the only per-branch instant, and the gantt used to render NOTHING.
+      // Render honest APPROXIMATE bars instead: subagent spawns start at the
+      // step's own start (parallel branches spawn together in one message),
+      // so [step start → completed_at] is the true upper bound per branch.
+      // Marked with a '~' duration so the approximation is visible —
+      // structural fallback only where the data guarantees it, never a heuristic on hosts that DO report duration.
+      if (bars.length && bars.every(b => b.isPhantom)) {
+        for (const b of bars) {
+          if (!b.inv || !b.inv.completed_at) continue;
+          b.isPhantom = false;
+          b.subStartMs = stepStart;
+          b.subEndMs = Math.min(new Date(b.inv.completed_at).getTime(), stepEnd);
+          b.durationLabel = '~' + fmtDuration(Math.max(0, b.subEndMs - b.subStartMs));
+        }
+      }
+
+      // Show when there's at least 1 real (non-phantom) bar with duration
+      const realBars = bars.filter(b => !b.isPhantom);
+      if (!realBars.length) return '';
+
+      // ── Tool-call dots on the subagent timeline ──────────────────────────
+      // Place each of this step's tool calls on the ONE subagent bar whose
+      // window contains its timestamp. We only draw a dot when attribution is
+      // unambiguous (exactly one bar covers that instant) — i.e. "only where
+      // we have the info". When the call's host gave no timestamp, or parallel
+      // bars overlap at that instant, we skip the dot; the textual "Tool Calls"
+      // list below still lists it. Pure viewer-side; no data-layer change.
+      const stepCalls = (trace.tool_calls || [])
+        .map((tc, gi) => ({ tc, gi, ms: tcTs(tc) ? new Date(tcTs(tc)).getTime() : NaN }))
+        .filter(x => x.tc.step === st.name && !Number.isNaN(x.ms));
+      const dotsByGroup = {};
+      for (const c of stepCalls) {
+        let gi2 = null;
+        // Preferred: attribute by subagent identity (agent_id ↔ subagent_id) —
+        // robust under parallel fan-out and immune to time-window edge cases
+        // (e.g. an early call whose ts falls just outside the bar's computed span).
+        if (c.tc.agent_id) {
+          const bar = bars.find(b => !b.isPhantom && b.inv && b.inv.subagent_id === c.tc.agent_id);
+          if (bar) gi2 = bar.groupIndex;
+        }
+        // Fallback: unambiguous time-window match (legacy records / no agent_id /
+        // inline steps). Only when exactly one bar covers the instant.
+        if (gi2 === null) {
+          const owners = bars.filter(b => !b.isPhantom && c.ms >= b.subStartMs && c.ms <= b.subEndMs);
+          if (owners.length === 1) gi2 = owners[0].groupIndex;
+        }
+        if (gi2 === null) continue;
+        (dotsByGroup[gi2] = dotsByGroup[gi2] || []).push(c);
+      }
+      const dotHtml = (b) => {
+        const cs = dotsByGroup[b.groupIndex];
+        if (!cs || !cs.length) return '';
+        return cs.map(c => {
+          const pct = Math.max(1, Math.min(99, ((c.ms - stepStart) / stepSpan) * 100));
+          const cls = 'timeline-tc-marker-' + (tcKind(c.tc) || 'other');
+          const label = esc(c.tc.tool_short || c.tc.tool || '?');
+          return `<span class="timeline-tc-marker ${cls}" style="left:${pct.toFixed(1)}%" title="${label}" onclick="event.stopPropagation();var el=document.getElementById('tc-detail-${c.gi}');if(el){el.classList.add('expanded');el.scrollIntoView({behavior:'smooth',block:'center'});}"></span>`;
+        }).join('');
+      };
+
+      // Time axis ticks — 4-5 marks evenly spaced
+      const tickCount = Math.min(5, Math.max(2, Math.floor(stepSpan / 60000) + 1));
+      let ticks = '';
+      for (let i = 0; i <= tickCount; i++) {
+        const pct = (i / tickCount) * 100;
+        const t = new Date(stepStart + (i / tickCount) * stepSpan);
+        const hh = String(t.getHours()).padStart(2, '0');
+        const mm = String(t.getMinutes()).padStart(2, '0');
+        const ss = String(t.getSeconds()).padStart(2, '0');
+        ticks += `<span class="gantt-tick" style="left:${pct}%">${hh}:${mm}:${ss}</span>`;
+      }
+
+      // Render rows
+      const rows = bars.map(b => {
+        if (b.isPhantom) {
+          // Phantom: thin marker line at the timestamp
+          const posPct = ((b.subStartMs - stepStart) / stepSpan * 100).toFixed(2);
+          return `<div class="gantt-row" style="opacity:0.45;height:18px">
+            <span class="gantt-label" title="${esc(b.hint)} (phantom)" style="font-style:italic;font-size:10px">${esc(b.hint)} <span style="color:var(--text-muted);font-size:9px">(phantom)</span></span>
+            <div class="gantt-track" style="height:10px">
+              <div style="position:absolute;left:${posPct}%;top:1px;width:2px;height:8px;background:var(--text-muted);border-radius:1px" title="Phantom invocation at ${fmtTime(b.inv.completed_at)}"></div>
+            </div>
+          </div>`;
+        }
+
+        // Build bar segments with duration labels on each
+        let barHtml = '';
+        if (b.hasRetries) {
+          // Primary bar (first attempt) — amber if failed (non-final), green if passed
+          if (!b.inv.completed_at) return '';
+          const primEnd = new Date(b.inv.completed_at).getTime();
+          const primLeft = ((b.subStartMs - stepStart) / stepSpan * 100).toFixed(2);
+          const primWidth = ((Math.min(primEnd, b.subEndMs) - b.subStartMs) / stepSpan * 100).toFixed(2);
+          const primPassed = b.inv.gate ? b.inv.gate.passed : true;
+          const primClass = primPassed ? 'gantt-bar-pass' : 'gantt-bar-retry'; // amber for non-final fail
+          const primDur = fmtDuration(b.inv.duration_ms);
+          barHtml += `<div class="gantt-bar ${primClass}" style="left:${primLeft}%;width:${primWidth}%;cursor:pointer" title="Attempt 1: ${primDur}" onclick="scrollToSubagent(${idx}, ${b.groupIndex}, 0);event.stopPropagation()">
+            <span class="gantt-bar-text">${primDur}</span>
+          </div>`;
+
+          // Retry bars — amber for non-final, green/red for last attempt
+          let prevEnd = primEnd;
+          b.retries.forEach((r, ri) => {
+            if (!r.completed_at) return;
+            const rEnd = new Date(r.completed_at).getTime();
+            const rStart = Math.max(prevEnd, b.subStartMs);
+            const rLeft = ((rStart - stepStart) / stepSpan * 100).toFixed(2);
+            const rWidth = ((rEnd - rStart) / stepSpan * 100).toFixed(2);
+            const rPassed = r.gate ? r.gate.passed : true;
+            const isLast = ri === b.retries.length - 1;
+            const rClass = rPassed ? 'gantt-bar-pass' : (isLast ? 'gantt-bar-fail' : 'gantt-bar-retry');
+            const rDur = fmtDuration(rEnd - rStart);
+            barHtml += `<div class="gantt-bar ${rClass}" style="left:${rLeft}%;width:${rWidth}%;cursor:pointer" title="Retry ${ri + 1}: ${rDur}" onclick="scrollToSubagent(${idx}, ${b.groupIndex}, ${ri + 1});event.stopPropagation()">
+              <span class="gantt-bar-text">${rDur}</span>
+            </div>`;
+            prevEnd = rEnd;
+          });
+        } else {
+          const leftPct  = ((b.subStartMs - stepStart) / stepSpan * 100).toFixed(2);
+          const widthPct = ((b.subEndMs - b.subStartMs) / stepSpan * 100).toFixed(2);
+          const cls = b.finalPassed ? 'gantt-bar-pass' : 'gantt-bar-fail';
+          barHtml = `<div class="gantt-bar ${cls}" style="left:${leftPct}%;width:${widthPct}%;cursor:pointer" title="${esc(b.hint)}: ${b.durationLabel}" onclick="scrollToSubagent(${idx}, ${b.groupIndex}, 0);event.stopPropagation()">
+            <span class="gantt-bar-text">${esc(b.durationLabel)}</span>
+          </div>`;
+        }
+
+        return `<div class="gantt-row">
+          <span class="gantt-label" title="${esc(b.hint)}">${esc(b.hint)}</span>
+          <div class="gantt-track">${barHtml}${dotHtml(b)}</div>
+        </div>`;
+      }).join('');
+
+      const hasRetries = bars.some(b => b.hasRetries);
+      const legend = `<div class="gantt-legend">
+        <span><span class="gantt-legend-dot" style="background:var(--green)"></span>gate passed</span>
+        ${hasRetries ? '<span><span class="gantt-legend-dot" style="background:var(--amber)"></span>retry (gate failed)</span>' : ''}
+        <span><span class="gantt-legend-dot" style="background:var(--red)"></span>final fail</span>
+        ${bars.some(b => b.isPhantom) ? '<span><span class="gantt-legend-dot" style="background:var(--text-muted)"></span>phantom</span>' : ''}
+        <span style="font-style:italic">Total: ${fmtDuration(stepSpan)}</span>
+      </div>`;
+
+      return `<div class="detail-block">
+        <div class="detail-label">Subagent Timeline (${realBars.length > 1 ? realBars.length + ' parallel' : totalInvocations > 1 ? totalInvocations + ' attempts' : '1 subagent'}${bars.some(b => b.isPhantom) ? ', ' + bars.filter(b => b.isPhantom).length + ' phantom' : ''})</div>
+        <div class="gantt-container">
+          <div class="gantt-axis">${ticks}</div>
+          ${rows}
+          ${legend}
+        </div>
+      </div>`;
+    }
+
+    function _matchBranchPrompt(inv, promptFiles) {
+      // Match invocation to branch prompt by _branch_N in modified_files
+      if (!promptFiles || !promptFiles.length) return null;
+      const files = inv.modified_files || [];
+      for (const f of files) {
+        const m = f.match(/_branch_(\d+)/);
+        if (m) {
+          const bi = parseInt(m[1]);
+          const pf = promptFiles.find(p =>
+            (typeof p === 'object' ? p.branch_index : null) === bi
+          );
+          if (pf) return pf;
+        }
+      }
+      // Fallback: match by invocation index if branches == invocations count
+      return null;
+    }
+
+    function renderAttemptBlock(inv, label, labelClass, isLast, gi, ai, promptFiles) {
+      const gate = inv.gate || {};
+      const gatePassed = gate.passed !== false; // default true if no gate
+      const hasGate = !!inv.gate;
+
+      // Meta
+      const metaItems = [];
+      if (inv.model) metaItems.push(`<span class="inv-meta-item"><strong>Model:</strong> ${esc(inv.model)}</span>`);
+      if (inv.note) metaItems.push(`<span class="inv-meta-item"><strong>Note:</strong> ${esc(inv.note)}</span>`);
+      if (inv.parallel_key) metaItems.push(`<span class="inv-meta-item"><strong>Key:</strong> ${esc(inv.parallel_key)}</span>`);
+      if (inv.subagent_id) metaItems.push(`<span class="inv-meta-item"><strong>ID:</strong> ${esc(inv.subagent_id.substring(0, 8))}…</span>`);
+      const metaHtml = metaItems.length ? `<div class="inv-meta">${metaItems.join('')}</div>` : '';
+
+      // Summary
+      const summaryHtml = inv.subagent_summary
+        ? `<div class="inv-expandable"><details><summary>Subagent Summary</summary><div class="inv-summary-text">${esc(inv.subagent_summary)}</div></details></div>`
+        : '';
+
+      // Task prompt (expandable)
+      const promptHtml = inv.task_prompt
+        ? `<div class="inv-expandable"><details><summary>Task Prompt (orchestrator → subagent)</summary><div class="inv-prompt-text">${esc(inv.task_prompt)}</div></details></div>`
+        : '';
+
+      // Branch prompt (parallel steps — the self-contained prompt file the subagent reads)
+      const branchPrompt = _matchBranchPrompt(inv, promptFiles);
+      let branchPromptHtml = '';
+      if (branchPrompt && typeof branchPrompt === 'object') {
+        const bIdx = branchPrompt.branch_index != null ? branchPrompt.branch_index : '?';
+        const bPath = branchPrompt.path || '';
+        const bContent = branchPrompt.content;
+        const bId = `bp-${gi}-${ai}`;
+        branchPromptHtml = `<div class="inv-expandable"><details><summary>Branch ${bIdx} Prompt <span style="font-size:10px;color:var(--text-muted);font-weight:normal">(self-contained task file read by subagent)</span></summary>
+          <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px"><code>${esc(bPath)}</code></div>
+          ${bContent ? `<div class="inv-prompt-text" style="max-height:400px;overflow:auto">${esc(bContent)}</div>` : '<div style="font-size:11px;color:var(--text-muted)">Content not embedded in trace</div>'}
+        </details></div>`;
+      }
+
+      // Transcript
+      const tPath = inv.transcript_path;
+      const transcriptHtml = tPath
+        ? `<div class="inv-meta"><span class="inv-meta-item"><strong>Transcript:</strong> ${esc(tPath)}</span></div>`
+        : '';
+
+      // Modified files
+      const files = inv.modified_files || [];
+      const filesHtml = files.length
+        ? `<details><summary>${files.length} file${files.length !== 1 ? 's' : ''} modified</summary><ul class="file-list">${files.map(f => `<li>${esc(f)}</li>`).join('')}</ul></details>`
+        : '';
+
+      // ── Gate section (visually separated) ──
+      let gateSectionHtml = '';
+      if (hasGate) {
+        const gateIcon = gatePassed
+          ? `<span class="gate-pass">&#10003;</span>`
+          : `<span class="gate-fail">&#10007;</span>`;
+        const gateClass = gatePassed ? 'gate-section-pass' : 'gate-section-fail';
+
+        let gateDetailsHtml = '';
+        if (!gatePassed && gate.details && gate.details.length) {
+          const gfId = 'gf-' + gi + '-' + ai + '-' + Math.random().toString(36).substr(2,5);
+          const allLines = gate.details.map(d => esc(String(d))).join('\n');
+          const count = gate.details.length;
+          gateDetailsHtml = `<div class="gate-failure-detail" id="${gfId}" onclick="document.getElementById('${gfId}').classList.toggle('open');event.stopPropagation()" style="margin-top:6px">
+            <div class="gate-failure-header">
+              <span class="gate-failure-toggle">&#9654;</span>
+              ${count} issue${count !== 1 ? 's' : ''}: ${esc(String(gate.details[0]))}${count > 1 ? ' …' : ''}
+            </div>
+            <div class="gate-failure-body">${allLines}</div>
+          </div>`;
+        }
+
+        gateSectionHtml = `<div class="gate-section ${gateClass}">
+          <div class="gate-header-row">
+            ${gateIcon}
+            <span class="gate-type-label">${esc(gate.type || 'gate')}</span>
+            <span style="font-size:11px;color:var(--text-muted)">${gate.checks || 0} checks, ${gate.failures || 0} failures</span>
+          </div>
+          ${gateDetailsHtml}
+        </div>`;
+      }
+
+      // ── Feedback arrow (only if gate failed and there's a followup) ──
+      let feedbackHtml = '';
+      if (!gatePassed && inv.followup_message && !isLast) {
+        feedbackHtml = `<div class="feedback-arrow" onclick="event.stopPropagation()">
+          <div class="feedback-arrow-text">${esc(inv.followup_message)}</div>
+        </div>`;
+      }
+
+      // Block styling: all attempts get colored left border + tinted bg
+      // amber = gate failed (non-final), green = gate passed, red = final fail
+      let blockClass;
+      if (gatePassed) {
+        blockClass = 'attempt-block-pass';
+      } else if (isLast) {
+        blockClass = 'attempt-block-fail';
+      } else {
+        blockClass = 'attempt-block-retry';
+      }
+
+      // Time range
+      let timeStr = '';
+      if (inv.completed_at && inv.duration_ms) {
+        const endMs = new Date(inv.completed_at).getTime();
+        const startMs = endMs - inv.duration_ms;
+        timeStr = `${fmtTime(new Date(startMs).toISOString())} → ${fmtTime(inv.completed_at)}`;
+      } else if (inv.completed_at) {
+        timeStr = fmtTime(inv.completed_at);
+      }
+
+      return `<div class="attempt-block ${blockClass}" data-group="${gi}" data-attempt="${ai}">
+        <div class="attempt-header">
+          <span class="attempt-label ${labelClass}">${label}</span>
+          <div class="attempt-stats">
+            <span>${fmtDuration(inv.duration_ms)}</span>
+            <span>${inv.message_count || 0} msg</span>
+            <span>${inv.tool_call_count || 0} tools</span>
+            ${timeStr ? `<span class="subagent-time">${timeStr}</span>` : ''}
+          </div>
+        </div>
+        ${metaHtml}
+        ${promptHtml}
+        ${branchPromptHtml}
+        ${summaryHtml}
+        ${filesHtml}
+        ${transcriptHtml}
+        ${gateSectionHtml}
+        ${feedbackHtml}
+      </div>`;
+    }
+
+    function renderInvocations(invocations, promptFiles) {
+      if (!invocations.length) return '';
+      const groups = groupInvocations(invocations);
+      const totalAttempts = invocations.length;
+      const label = `Invocations (${groups.length} subagent${groups.length !== 1 ? 's' : ''}, ${totalAttempts} total)`;
+      const pf = promptFiles || [];
+
+      const html = groups.map((g, gi) => {
+        const inv = g.primary;
+        const retries = g.retries;
+        const hasRetries = retries.length > 0;
+        const lastInv = hasRetries ? retries[retries.length - 1] : inv;
+        const finalPassed = lastInv.gate ? lastInv.gate.passed : true;
+        const allInvocations = [inv, ...retries];
+
+        // Compute overall start/end
+        let startTimeStr = '';
+        let endTimeStr = '';
+        if (inv.completed_at && inv.duration_ms) {
+          const endMs = new Date(inv.completed_at).getTime();
+          const startMs = endMs - inv.duration_ms;
+          startTimeStr = fmtTime(new Date(startMs).toISOString());
+          endTimeStr = fmtTime(inv.completed_at);
+        } else if (inv.completed_at) {
+          endTimeStr = fmtTime(inv.completed_at);
+        }
+        if (hasRetries && lastInv.completed_at) {
+          endTimeStr = fmtTime(lastInv.completed_at);
+        }
+        const timeRange = startTimeStr
+          ? `<span class="subagent-time">${startTimeStr}${endTimeStr ? ' → ' + endTimeStr : ''}</span>`
+          : '';
+
+        // Aggregate stats
+        const totalMsgs = Math.max(inv.message_count || 0, ...(retries.map(r => r.message_count || 0)));
+        const totalTools = (inv.tool_call_count || 0) + retries.reduce((s, r) => s + (r.tool_call_count || 0), 0);
+
+        const gateIcon = finalPassed
+          ? `<span class="gate-pass">&#10003;</span>`
+          : `<span class="gate-fail">&#10007;</span>`;
+
+        const taskHint = extractTaskHint(inv);
+
+        // Render all attempts as separate blocks
+        const attemptBlocks = allInvocations.map((a, ai) => {
+          const isLast = ai === allInvocations.length - 1;
+          if (ai === 0) {
+            return renderAttemptBlock(a, `Attempt 1`, 'attempt-label-primary', isLast, gi, ai, pf);
+          } else {
+            return renderAttemptBlock(a, `↻ Retry ${ai}`, 'attempt-label-retry', isLast, gi, ai, pf);
+          }
+        }).join('');
+
+        return `<div class="subagent-group" onclick="this.classList.toggle('open');event.stopPropagation()">
+          <div class="subagent-header">
+            <span class="subagent-toggle">&#9654;</span>
+            <span class="subagent-label">Subagent ${gi + 1}</span>
+            ${inv.model ? `<span class="step-model">${esc(inv.model)}</span>` : ''}
+            ${taskHint ? `<span style="font-size:11px;color:var(--text-secondary);font-style:italic">${esc(taskHint)}</span>` : ''}
+            ${timeRange}
+            ${inv.hook_status && inv.hook_status !== 'unknown' ? `<span class="pill pill-${inv.hook_status === 'completed' ? 'completed' : 'failed'}">${esc(inv.hook_status)}</span>` : ''}
+            <span>${fmtDuration(inv.duration_ms)}</span>
+            <span>${totalMsgs} msg</span>
+            <span>${totalTools} tools</span>
+            ${gateIcon}
+            ${hasRetries ? `<span class="gate-info">${retries.length} retr${retries.length === 1 ? 'y' : 'ies'}</span>` : ''}
+          </div>
+          <div class="subagent-body" onclick="event.stopPropagation()">
+            ${attemptBlocks}
+          </div>
+        </div>`;
+      }).join('');
+      return `<div class="detail-block"><div class="detail-label">${label}</div>${html}</div>`;
+    }
+
+    // ── Ledger-derived subagent fallback (hookless host surfaces) ──────────
+    // Subagent visibility on hookless host surfaces (e.g. cursor-agent CLI,
+    // where subagentStop never fires → invocations stay empty by construction
+    // while the tool-call ledger still records every call WITH a stable
+    // per-session key). PRECEDENCE IS STRUCTURAL, never heuristic:
+    //   invocations.length > 0  → hook data is authoritative; this renders ''.
+    //   invocations.length == 0 → pseudo-cards derived from the ledger.
+    // The two paths can never double-render a subagent.
+
+    // Group this step's tool calls by session key (agent_id when the host
+    // provides it, else the hook-payload correlation id `corr`). Collapses
+    // mixed-adapter duplicates: the same physical write reported through two
+    // hook configs (host stamps differ, same session + file, ≤2.5s apart).
+    function groupLedgerSessions(st) {
+      const calls = (trace.tool_calls || []).filter(tc => tc.step === st.name);
+      const byKey = new Map();
+      for (const tc of calls) {
+        const key = tc.agent_id || tc.corr;
+        if (!key) continue;
+        if (!byKey.has(key)) byKey.set(key, []);
+        byKey.get(key).push(tc);
+      }
+      const groups = [];
+      for (const [key, evts] of byKey) {
+        evts.sort((a, b) => String(tcTs(a) || '').localeCompare(String(tcTs(b) || '')));
+        const merged = [];
+        for (const e of evts) {
+          const eFile = (e.args && (e.args.file_path || e.args.filePath)) || null;
+          const eTs = tcTs(e) ? new Date(tcTs(e)).getTime() : null;
+          const prev = merged[merged.length - 1];
+          const pFile = prev && ((prev.args && (prev.args.file_path || prev.args.filePath)) || null);
+          const pTs = prev && tcTs(prev) ? new Date(tcTs(prev)).getTime() : null;
+          if (prev && eFile && pFile && eFile === pFile && eTs != null && pTs != null &&
+              Math.abs(eTs - pTs) <= 2500 && e.host !== prev.host) {
+            prev._dupHosts = [...new Set([...(prev._dupHosts || [prev.host]), e.host])];
+            continue;
+          }
+          merged.push({ ...e });
+        }
+        const firstTs = tcTs(merged[0]);
+        const lastTs = tcTs(merged[merged.length - 1]);
+        groups.push({ key, events: merged, rawCount: evts.length, firstTs, lastTs });
+      }
+      groups.sort((a, b) => String(a.firstTs || '').localeCompare(String(b.firstTs || '')));
+      return groups;
+    }
+
+    function renderLedgerSubagents(st) {
+      const inv = st.invocations || [];
+      if (inv.length > 0) return ''; // hook data present → authoritative, no pseudo-cards
+      const cfg = st.config || {};
+      if (cfg.subagent === false) return ''; // inline step: 0 invocations is normal
+      // Planning + delegation steps are driven by the ORCHESTRATOR directly, not
+      // a spawned subagent — 0 subagent-lifecycle events is BY DESIGN there (the
+      // planning child's substeps carry their own gates; a delegation step runs
+      // the child workflow). Without this guard the "host did not emit subagent
+      // hooks" banner fires misleadingly on every planning/delegation step, on
+      // ALL hosts (surfaced via the copilot full-mechanics-demo audit 2026-07-31).
+      if (st.planning) return '';
+      if (st.delegate_to) return '';
+      if (st.status === 'pending') return '';
+      const groups = groupLedgerSessions(st);
+      if (!groups.length) return '';
+
+      // Host-aware banner: generic wording by default; a dedicated message when
+      // the ledger stamps identify a Cursor CLI run (tool events carry host
+      // 'cursor' while no subagent lifecycle events arrived — the CLI currently
+      // implements only a subset of the hook events).
+      const stepHosts = new Set(groups.flatMap(g => g.events.map(e => e.host).filter(Boolean)));
+      const looksLikeCursorCli = stepHosts.has('cursor');
+      const bannerText = looksLikeCursorCli
+        ? `This appears to be a <strong>Cursor CLI</strong> (cursor-agent) run. The CLI currently emits only a subset of hook
+           events and no subagent lifecycle events, so per-subagent gate telemetry is unavailable for this step.`
+        : `The host did not emit subagent lifecycle hook events for this step, so per-subagent gate telemetry is unavailable.`;
+      const banner = `<div style="background:rgba(230,160,30,0.08);border:1px solid var(--amber);border-radius:6px;padding:6px 10px;font-size:11px;margin-bottom:6px">
+        &#9888; ${bannerText} Activity below is <strong>reconstructed from the tool-call ledger</strong>;
+        outputs were still validated by the engine's built-in gate.
+      </div>`;
+
+      const cards = groups.map((g, gi) => {
+        const tools = [...new Set(g.events.map(e => e.tool_short || e.tool).filter(Boolean))];
+        const files = [...new Set(g.events
+          .map(e => (e.args && (e.args.file_path || e.args.filePath)) || null)
+          .filter(Boolean)
+          .map(f => String(f).split(/[\\/]/).pop()))];
+        const dupCount = g.events.filter(e => e._dupHosts && e._dupHosts.length > 1).length;
+        const timeRange = g.firstTs
+          ? `<span class="subagent-time">${fmtTime(g.firstTs)}${g.lastTs && g.lastTs !== g.firstTs ? ' → ' + fmtTime(g.lastTs) : ''}</span>`
+          : '';
+        const rows = g.events.map(e => {
+          const f = (e.args && (e.args.file_path || e.args.filePath)) || '';
+          const dup = e._dupHosts && e._dupHosts.length > 1
+            ? ` <span class="pill" style="font-size:9px;background:var(--bg-secondary)" title="The same write was reported by ${e._dupHosts.length} hook configurations (${esc(e._dupHosts.join(', '))}) — shown once.">&times;${e._dupHosts.length} adapters</span>`
+            : '';
+          return `<div style="font-size:11px;padding:2px 0;font-family:var(--mono)">
+            <span class="orch-time">${tcTs(e) ? fmtTime(tcTs(e)) : ''}</span>
+            <strong>${esc(e.tool_short || e.tool || '?')}</strong>
+            ${f ? `<span style="color:var(--text-muted);word-break:break-all"> ${esc(String(f).split(/[\\/]/).pop())}</span>` : ''}${dup}
+          </div>`;
+        }).join('');
+        return `<div class="subagent-group" onclick="this.classList.toggle('open');event.stopPropagation()">
+          <div class="subagent-header">
+            <span class="subagent-toggle">&#9654;</span>
+            <span class="subagent-label">Session ${gi + 1}</span>
+            <span class="pill" style="font-size:9px;background:var(--bg-secondary)" title="Reconstructed from the tool-call ledger (session key: ${esc(String(g.key).slice(0, 12))}…) — no hook data for this step">ledger-derived</span>
+            ${timeRange}
+            <span>${g.events.length} tool call${g.events.length !== 1 ? 's' : ''}${dupCount ? ` (${g.rawCount} raw)` : ''}</span>
+            ${tools.length ? `<span style="font-size:10px;color:var(--text-muted)">${esc(tools.join(', '))}</span>` : ''}
+          </div>
+          <div class="subagent-body" onclick="event.stopPropagation()">
+            ${rows}
+            ${files.length ? `<div style="font-size:10px;color:var(--text-muted);margin-top:4px">files: ${esc(files.join(', '))}</div>` : ''}
+          </div>
+        </div>`;
+      }).join('');
+
+      const label = `Subagent activity — ledger-derived (${groups.length} session${groups.length !== 1 ? 's' : ''})`;
+      return `<div class="detail-block"><div class="detail-label">${label}</div>${banner}${cards}</div>`;
+    }
+
+    function renderToolWarnings(st) {
+      const warnings = st.tool_warnings;
+      if (!warnings || !warnings.length) return '';
+
+      const rows = warnings.map(w => {
+        const typeBadge = `<span class="tool-warning-type">${esc(w.type || '?')}</span>`;
+        return `<div class="tool-warning-row">
+          <span class="tool-warning-icon">&#9888;</span>
+          <div class="tool-warning-text">
+            <span class="tool-warning-tool">${esc(w.tool)}</span> ${typeBadge}
+            <div style="font-size:11px;margin-top:2px">${esc(w.warning)}</div>
+          </div>
+        </div>`;
+      }).join('');
+
+      return `<div class="detail-block">
+        <div class="tool-warning-box">
+          <div style="font-size:11px;font-weight:600;margin-bottom:4px">&#9888; Tool Warnings (${warnings.length})</div>
+          ${rows}
+        </div>
+      </div>`;
+    }
+
+    function renderPromptFiles(st) {
+      const files = st.prompt_files;
+      if (!files || !files.length) return '';
+      // Support both old format (plain strings) and new format (objects with content)
+      const rows = files.map((f, i) => {
+        const isObj = typeof f === 'object' && f !== null;
+        const path = isObj ? f.path : f;
+        const content = isObj ? f.content : null;
+        const idx = isObj && f.branch_index != null ? f.branch_index : i;
+        const id = `prompt-${st.name}-${idx}`;
+        const contentBlock = content
+          ? `<div id="${id}" class="prompt-content" style="display:none;margin:4px 0 8px 0;max-height:400px;overflow:auto;background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:4px;padding:8px;font-size:11px;white-space:pre-wrap;font-family:var(--mono)">${esc(content)}</div>`
+          : '';
+        const toggleBtn = content
+          ? `<span class="prompt-toggle" onclick="var el=document.getElementById('${id}');el.style.display=el.style.display==='none'?'block':'none';this.textContent=el.style.display==='none'?'▶':'▼'" style="cursor:pointer;font-size:10px;margin-right:4px;color:var(--text-muted)">▶</span>`
+          : '<span style="font-size:10px;margin-right:4px;color:var(--text-muted)">·</span>';
+        return `<li style="margin:2px 0">
+          ${toggleBtn}<strong style="font-size:11px">Branch ${idx}</strong>
+          <code style="font-size:10px;background:var(--bg-secondary);padding:1px 4px;border-radius:3px;margin-left:4px">${esc(path)}</code>
+          ${contentBlock}
+        </li>`;
+      }).join('');
+      return `<div class="detail-block">
+        <div class="detail-label">Branch Prompts (${files.length} files)</div>
+        <ul style="list-style:none;padding:0;margin:4px 0">${rows}</ul>
+      </div>`;
+    }
+
+    function renderStepToolCalls(st, stepIdx) {
+      if (!trace.tool_calls || !trace.tool_calls.length) return '';
+      const calls = trace.tool_calls.map((tc, gi) => ({ ...tc, _gi: gi })).filter(tc => tc.step === st.name);
+      if (!calls.length) return '';
+
+      const rows = calls.map(tc => {
+        const ok = tc.success !== false;
+        const dotCls = ok ? 'orch-dot orch-dot-green' : 'orch-dot orch-dot-fail';
+        const toolName = tc.tool_short || tc.tool || '?';
+        const argsObj = tcArgsObj(tc);
+        // Full args/result go INTO the block; CSS collapses it to ~40px and a click
+        // expands to the FULL content (the logger caps args at 2000 / result at 500
+        // chars, so "full" is the captured payload). Fixes the old result preview
+        // that truncated the content itself → expanding revealed nothing more.
+        const argsHtml = argsObj && Object.keys(argsObj).length
+          ? `<div class="tool-call-kv"><span class="tool-call-kv-tag">args</span>${esc(JSON.stringify(argsObj, null, 2))}</div>`
+          : '';
+        const dur = tc.duration_ms != null ? `<span class="orch-dur">${tc.duration_ms}ms</span>` : '';
+        const errHtml = tc.error ? `<span class="orch-error">${esc(tc.error)}</span>` : '';
+        const exitHtml = tc.exit_code != null && tc.exit_code !== 0 ? `<span class="orch-error">exit ${tc.exit_code}</span>` : '';
+        const outLen = tc.output_length ? `<span class="orch-summary" title="output size">${tc.output_length} chars output</span>` : '';
+        const ts = tcTs(tc);
+        const time = ts ? `<span class="orch-time">${fmtTime(ts)}</span>` : '';
+
+        const resultStr = tcResult(tc);
+        const previewHtml = resultStr
+          ? `<div class="tool-call-kv"><span class="tool-call-kv-tag">result</span>${esc(resultStr)}</div>`
+          : '';
+        const detail = `${argsHtml}${previewHtml}`;
+        const caret = detail
+          ? '<span class="tool-call-caret">▸</span>'
+          : '<span class="tool-call-caret"></span>';
+        // Collapsed by default: only the summary row shows. Clicking it toggles
+        // `.expanded` on the container → reveals the full args + result.
+        const rowAttrs = detail
+          ? ' onclick="this.parentElement.classList.toggle(\'expanded\');event.stopPropagation()"'
+          : '';
+        return `<div class="tool-call" id="tc-detail-${tc._gi}">
+          <div class="tool-call-row"${rowAttrs}>
+            ${caret}
+            ${time}
+            <span class="${dotCls}"></span>
+            <span class="tool-call-name">${esc(toolName)}</span>
+            ${tcBadgesHtml(tc)}
+            ${dur}
+            ${outLen}
+            ${exitHtml}${errHtml}
+          </div>
+          ${detail ? `<div class="tool-call-detail">${detail}</div>` : ''}
+        </div>`;
+      }).join('');
+
+      return `<div class="detail-block">
+        <div class="tool-calls-section">
+          <div class="tool-calls-section-title">Tool Calls (${calls.length})</div>
+          ${rows}
+        </div>
+      </div>`;
+    }
+
+    function renderModifiedFiles(files) {
+      if (!files.length) return '';
+      return `<div class="detail-block">
+        <details>
+          <summary>${files.length} file${files.length !== 1 ? 's' : ''} modified across all attempts</summary>
+          <ul class="file-list">${files.map(f => `<li>${esc(f)}</li>`).join('')}</ul>
+        </details>
+      </div>`;
+    }
+
+    // One resolved file behind a declared input/output: path + badges +
+    // collapsed content preview (native <details> — no JS, collapsed by default).
+    function renderResolvedFile(f) {
+      const badges = [];
+      if (f.exists === false) badges.push('<span class="io-tag io-tag-warn">missing</span>');
+      if (typeof f.size === 'number') badges.push(`<span class="io-tag">${f.size} B</span>`);
+      if (f.binary) badges.push('<span class="io-tag">binary</span>');
+      if (f.truncated) badges.push('<span class="io-tag">truncated</span>');
+      const head = `<span class="io-path">${esc(f.path || '?')}</span> ${badges.join(' ')}`;
+      const hasPreview = f.value_preview != null && f.value_preview !== '';
+      const note = f.truncated ? '\n… (truncated — open the file for the full content)' : '';
+      const preview = hasPreview
+        ? `<details class="io-preview"><summary>preview</summary><pre class="io-pre">${esc(f.value_preview + note)}</pre></details>`
+        : '';
+      return `<li>${head}${preview}</li>`;
+    }
+
+    function renderResolvedList(resolved, emptyLabel) {
+      const arr = resolved || [];
+      if (!arr.length) return `<span class="io-empty">${esc(emptyLabel)}</span>`;
+      return `<ul class="io-file-list">${arr.map(renderResolvedFile).join('')}</ul>`;
+    }
+
+    // START-of-step: declared inputs, resolved + populated. Collapsed section.
+    function renderStepInputs(st) {
+      const inputs = st.inputs || [];
+      if (!inputs.length) return '';
+      const items = inputs.map(inp => {
+        const tags = [];
+        if (inp.inject) tags.push(`<span class="io-tag">${esc(inp.inject)}</span>`);
+        if (inp.struct) tags.push(`<span class="io-tag">struct: ${esc(inp.struct)}</span>`);
+        return `<li><span class="io-path">${esc(inp.path || '?')}</span> ${tags.join(' ')}${renderResolvedList(inp.resolved, '(no file resolved)')}</li>`;
+      }).join('');
+      return `<div class="detail-block"><details class="io-section"><summary class="io-section-summary">Inputs (resolved) — ${inputs.length}</summary><ul class="io-list">${items}</ul></details></div>`;
+    }
+
+    // END-of-step: produced outputs + applied param_bindings. Collapsed section.
+    function renderStepOutputs(st) {
+      const outputs = st.outputs || [];
+      const pb = st.param_bindings || {};
+      const pbKeys = Object.keys(pb);
+      if (!outputs.length && !pbKeys.length) return '';
+      let inner = '';
+      if (outputs.length) {
+        const items = outputs.map(out => {
+          const tags = [];
+          if (out.struct) tags.push(`<span class="io-tag">struct: ${esc(out.struct)}</span>`);
+          if (out.write_proof) tags.push(`<span class="io-tag">write_proof: ${esc(out.write_proof)}</span>`);
+          if (out.optional) tags.push('<span class="io-tag">optional</span>');
+          // F7: artifact handoff — this output was COPIED from the delegated
+          // child's run dir by the engine at step_complete.
+          if (out.from_delegated) tags.push(`<span class="io-tag io-tag-warn" data-tip="Artifact handoff (from_delegated): at step_complete the engine copied this file FROM the delegated child's run dir (source: ${esc(out.from_delegated)}, resolved against the CHILD's params) to this parent-side path, where it was gate-validated like a normal output.">from child: ${esc(out.from_delegated)}</span>`);
+          return `<li><span class="io-path">${esc(out.path || '?')}</span> ${tags.join(' ')}${renderResolvedList(out.resolved, '(not produced)')}</li>`;
+        }).join('');
+        inner += `<div class="io-group"><div class="io-group-label">Outputs</div><ul class="io-list">${items}</ul></div>`;
+      }
+      if (pbKeys.length) {
+        const rows = pbKeys.map(k => {
+          const b = pb[k] || {};
+          const val = (b.value !== null && typeof b.value === 'object') ? JSON.stringify(b.value) : String(b.value);
+          return `<li><span class="io-path">${esc(k)}</span> <span class="io-tag">${esc(b.expr || '')}</span> = <code>${esc(val)}</code></li>`;
+        }).join('');
+        inner += `<div class="io-group"><div class="io-group-label">Param bindings</div><ul class="io-list">${rows}</ul></div>`;
+      }
+      return `<div class="detail-block"><details class="io-section"><summary class="io-section-summary">Outputs &amp; bindings</summary>${inner}</details></div>`;
+    }
+
+    function toggleStep(idx) { document.getElementById('step-' + idx).classList.toggle('open'); }
+
+    function scrollToStep(idx) {
+      const el = document.getElementById('step-' + idx);
+      if (el) { el.classList.add('open'); el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+    }
+
+    function scrollToSubagent(stepIdx, groupIdx, attemptIdx) {
+      // Open the target step card and find the nth subagent-group within it
+      const stepCard = document.getElementById('step-' + stepIdx);
+      if (!stepCard) return;
+      stepCard.classList.add('open');
+      const groups = stepCard.querySelectorAll('.subagent-group');
+      if (groups[groupIdx]) {
+        groups[groupIdx].classList.add('open');
+        // If attemptIdx given, scroll to the specific attempt block
+        const target = typeof attemptIdx === 'number'
+          ? groups[groupIdx].querySelector(`.attempt-block[data-attempt="${attemptIdx}"]`)
+          : groups[groupIdx];
+        const el = target || groups[groupIdx];
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // Brief highlight
+        el.style.outline = '2px solid var(--accent)';
+        el.style.outlineOffset = '2px';
+        setTimeout(() => { el.style.outline = ''; el.style.outlineOffset = ''; }, 1800);
+      }
+    }
+
+    // ── Tooltip system (click to show, ? hint follows cursor) ──
+    (function() {
+      let activeTip = null;
+      let hint = null;
+
+      // Create floating ? hint
+      function ensureHint() {
+        if (hint) return;
+        hint = document.createElement('div');
+        hint.className = 'tip-hint';
+        hint.textContent = '?';
+        hint.style.opacity = '0';
+        document.body.appendChild(hint);
+      }
+
+      function closeTip() {
+        if (activeTip) { activeTip.remove(); activeTip = null; }
+      }
+
+      // Show/hide ? near cursor when hovering data-tip elements
+      document.addEventListener('mouseover', function(e) {
+        const el = e.target.closest('[data-tip]');
+        ensureHint();
+        hint.style.opacity = el ? '1' : '0';
+      });
+      document.addEventListener('mouseout', function(e) {
+        if (!e.target.closest('[data-tip]')) {
+          ensureHint();
+          hint.style.opacity = '0';
+        }
+      });
+      document.addEventListener('mousemove', function(e) {
+        if (!hint || hint.style.opacity === '0') return;
+        hint.style.left = (e.clientX + 12) + 'px';
+        hint.style.top = (e.clientY - 8) + 'px';
+      });
+
+      // Click to show tooltip popup.
+      // NEVER swallow a click on a control. This handler runs in the capture
+      // phase and stops propagation, so any interactive element that happens
+      // to carry data-tip would become dead — which is exactly what happened
+      // to the inbox dialog inside the studio: the studio's help bridge
+      // rewrites `title` into `data-tip` on hover, so Accept/Reject went dead
+      // after the first mouse-over while Send (no title) kept working.
+      document.addEventListener('click', function(e) {
+        if (e.target.closest('button, a, input, select, textarea, [onclick]')) { closeTip(); return; }
+        const el = e.target.closest('[data-tip]');
+        if (!el) { closeTip(); return; }
+        e.stopPropagation();
+        if (activeTip && activeTip._src === el) { closeTip(); return; }
+        closeTip();
+        const rect = el.getBoundingClientRect();
+        const tip = document.createElement('div');
+        tip.className = 'tip-popup';
+        tip.textContent = el.dataset.tip;
+        tip._src = el;
+        document.body.appendChild(tip);
+        const tipRect = tip.getBoundingClientRect();
+        let left = rect.left + rect.width / 2 - tipRect.width / 2;
+        let top = rect.top - tipRect.height - 8;
+        if (left < 8) left = 8;
+        if (left + tipRect.width > window.innerWidth - 8) left = window.innerWidth - tipRect.width - 8;
+        if (top < 8) { top = rect.bottom + 8; }
+        tip.style.left = left + 'px';
+        tip.style.top = top + 'px';
+        activeTip = tip;
+      }, true);
+      document.addEventListener('scroll', closeTip, true);
+    })();
+
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = String(s);
+      return d.innerHTML;
+    }
+  </script>
+</body>
+</html>
